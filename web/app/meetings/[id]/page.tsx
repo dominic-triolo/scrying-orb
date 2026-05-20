@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import TypeBadge from '@/components/TypeBadge'
 import SynthesisPanel from '@/components/SynthesisPanel'
+import OutreachPanel from '@/components/OutreachPanel'
 import type { MeetingDetail } from '@/lib/db'
 
 const MEETING_TYPES = ['intro', 'planning', 'nurture']
@@ -16,7 +17,7 @@ function formatDate(iso: string | null): string {
   })
 }
 
-type Tab = 'analysis' | 'transcript' | 'attendees'
+type Tab = 'analysis' | 'transcript' | 'attendees' | 'outreach'
 
 export default function MeetingPage() {
   const { id } = useParams<{ id: string }>()
@@ -71,6 +72,7 @@ export default function MeetingPage() {
     { key: 'analysis', label: 'AI Analysis' },
     { key: 'transcript', label: 'Transcript' },
     { key: 'attendees', label: `Attendees (${meeting.contacts.length})` },
+    { key: 'outreach', label: 'Outreach' },
   ]
 
   return (
@@ -208,6 +210,19 @@ export default function MeetingPage() {
               ) : (
                 <p className="text-sm text-gray-400 italic">Transcript not yet available.</p>
               )
+            )}
+
+            {tab === 'outreach' && (
+              <OutreachPanel
+                meetingId={meeting.id}
+                hubspotDealId={meeting.hubspot_deal_id}
+                summaryText={
+                  typeof meeting.synthesis_output?.summary === 'string'
+                    ? meeting.synthesis_output.summary
+                    : null
+                }
+                contacts={meeting.contacts}
+              />
             )}
 
             {tab === 'attendees' && (
