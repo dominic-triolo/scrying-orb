@@ -30,12 +30,16 @@ COL = {
 
 class SheetClient:
     def __init__(self, config: Config):
-        creds = service_account.Credentials.from_service_account_info(
-            config.google_service_account_info, scopes=SCOPES
-        )
-        self._service = build("sheets", "v4", credentials=creds)
+        self._service_account_info = config.google_service_account_info
         self._sheet_id = config.log_sheet_id
         self._tab = config.log_sheet_tab
+        self._service = self._build_service()
+
+    def _build_service(self):
+        creds = service_account.Credentials.from_service_account_info(
+            self._service_account_info, scopes=SCOPES
+        )
+        return build("sheets", "v4", credentials=creds)
 
     def _range(self, row: int | None = None) -> str:
         if row is None:
@@ -44,12 +48,21 @@ class SheetClient:
 
     def get_pending_rows(self) -> list[dict]:
         """Return all rows with status = 'pending_synthesis'."""
-        result = (
-            self._service.spreadsheets()
-            .values()
-            .get(spreadsheetId=self._sheet_id, range=self._tab)
-            .execute()
-        )
+        for attempt in range(2):
+            try:
+                result = (
+                    self._service.spreadsheets()
+                    .values()
+                    .get(spreadsheetId=self._sheet_id, range=self._tab)
+                    .execute()
+                )
+                break
+            except BrokenPipeError:
+                if attempt == 0:
+                    logger.warning("Broken pipe on Sheets API — rebuilding client and retrying")
+                    self._service = self._build_service()
+                else:
+                    raise
         rows = result.get("values", [])
         if not rows:
             return []
