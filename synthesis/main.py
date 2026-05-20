@@ -3,7 +3,7 @@ TrovaTrip Synthesis Service
 ----------------------------
 Polls the handoff Google Sheet for pending_synthesis rows, runs Gemini AI
 analysis on each transcript, resolves HubSpot contacts, writes to Postgres,
-posts a HubSpot meeting activity, and marks the sheet row complete.
+and marks the sheet row complete.
 
 Entry point for the Railway worker process.
 """
@@ -77,18 +77,7 @@ def process_row(
         )
         db.upsert_contacts(meeting_id, contacts)
 
-        # 7. Post HubSpot meeting activity (async — failure doesn't block)
-        try:
-            hubspot.post_meeting_activity(
-                row=row,
-                synthesis=synthesis,
-                contacts=contacts,
-                meeting_datetime=row.get("meeting_datetime"),
-            )
-        except Exception as hs_err:
-            logger.warning(f"HubSpot activity post failed for {pairing_key}: {hs_err}")
-
-        # 8. Mark sheet row complete
+        # 7. Mark sheet row complete
         sheet.mark_complete(row["row_index"])
         logger.info(f"Complete: {pairing_key}")
 
