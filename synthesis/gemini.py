@@ -12,9 +12,9 @@ logger = logging.getLogger(__name__)
 
 PROMPT_DIR = os.path.join(os.path.dirname(__file__), "prompts")
 
-USER_PROMPT = (
+USER_PROMPT_PREFIX = (
     "Analyze the following meeting transcript and return the JSON object as specified.\n\n"
-    "TRANSCRIPT:\n{transcript}"
+    "TRANSCRIPT:\n"
 )
 
 
@@ -91,7 +91,7 @@ class GeminiClient:
         Returns the parsed JSON output dict.
         """
         system_prompt = _load_prompt(meeting_type)
-        user_content = USER_PROMPT.format(transcript=transcript)
+        user_content = USER_PROMPT_PREFIX + transcript
 
         client = genai.Client(api_key=self._api_key)
 

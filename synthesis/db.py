@@ -112,7 +112,7 @@ class DBClient:
 
         sql = """
             INSERT INTO meeting_contacts (meeting_id, email, hubspot_contact_id)
-            VALUES %(values)s
+            VALUES %s
             ON CONFLICT (meeting_id, email) DO UPDATE SET
                 hubspot_contact_id = COALESCE(EXCLUDED.hubspot_contact_id, meeting_contacts.hubspot_contact_id)
         """
