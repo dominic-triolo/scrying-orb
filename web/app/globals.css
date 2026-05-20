@@ -1,0 +1,15 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-50 text-gray-900 antialiased;
+  }
+}
+
+/* Preserve whitespace in transcript / synthesis text */
+.prose-pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
