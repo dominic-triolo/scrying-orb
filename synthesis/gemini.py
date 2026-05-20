@@ -27,10 +27,40 @@ def _load_prompt(meeting_type: str) -> str:
         return f.read()
 
 
+def _escape_control_chars(text: str) -> str:
+    """
+    Escape literal control characters inside JSON string values.
+    Gemini sometimes emits real newlines/tabs inside strings instead of \\n/\\t,
+    which makes json.loads fail with 'Invalid control character'.
+    Walks the text character by character, tracking string context.
+    """
+    result = []
+    in_string = False
+    escaped = False
+    escape_map = {'\n': '\\n', '\r': '\\r', '\t': '\\t'}
+
+    for ch in text:
+        if escaped:
+            result.append(ch)
+            escaped = False
+        elif ch == '\\' and in_string:
+            result.append(ch)
+            escaped = True
+        elif ch == '"':
+            result.append(ch)
+            in_string = not in_string
+        elif in_string and ord(ch) < 32:
+            result.append(escape_map.get(ch, f'\\u{ord(ch):04x}'))
+        else:
+            result.append(ch)
+
+    return ''.join(result)
+
+
 def _extract_json(text: str) -> dict:
     """
     Extract and parse the JSON object from Gemini's response.
-    Handles cases where the model wraps the JSON in markdown code fences.
+    Handles markdown fences and literal control characters in string values.
     """
     # Strip markdown fences if present
     cleaned = re.sub(r"^```(?:json)?\s*", "", text.strip(), flags=re.IGNORECASE)
@@ -38,12 +68,16 @@ def _extract_json(text: str) -> dict:
 
     try:
         return json.loads(cleaned)
-    except json.JSONDecodeError as e:
-        # Last resort: find the first { ... } block
-        match = re.search(r"\{.*\}", cleaned, re.DOTALL)
-        if match:
-            return json.loads(match.group())
-        raise ValueError(f"Could not parse JSON from Gemini response: {e}\n\nRaw:\n{text[:500]}")
+    except json.JSONDecodeError:
+        # Escape any literal control characters inside string values and retry
+        cleaned = _escape_control_chars(cleaned)
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError as e:
+            match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+            if match:
+                return json.loads(match.group())
+            raise ValueError(f"Could not parse JSON from Gemini response: {e}\n\nRaw:\n{text[:500]}")
 
 
 class GeminiClient:
@@ -67,6 +101,7 @@ class GeminiClient:
             contents=user_content,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
+                response_mime_type="application/json",
             ),
         )
         raw = response.text
