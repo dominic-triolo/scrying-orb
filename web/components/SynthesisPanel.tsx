@@ -18,7 +18,7 @@ const FIELD_LABELS: Record<string, string> = {
 // Summary renders expanded by default; others start collapsed
 const DEFAULT_OPEN = new Set(['summary', 'next_steps', 'eagerness_level'])
 
-function Section({ label, content }: { label: string; content: string }) {
+function Section({ label, content }: { label: string; content: unknown }) {
   const [open, setOpen] = useState(DEFAULT_OPEN.has(
     Object.entries(FIELD_LABELS).find(([, v]) => v === label)?.[0] ?? ''
   ))
@@ -39,7 +39,9 @@ function Section({ label, content }: { label: string; content: string }) {
       </button>
       {open && (
         <div className="px-4 py-3 bg-gray-50 border-t border-gray-200">
-          <p className="text-sm text-gray-700 prose-pre leading-relaxed">{content}</p>
+          <p className="text-sm text-gray-700 prose-pre leading-relaxed">
+            {Array.isArray(content) ? content.join('\n') : String(content ?? '')}
+          </p>
         </div>
       )}
     </div>
@@ -59,7 +61,7 @@ export default function SynthesisPanel({
     )
   }
 
-  const entries = Object.entries(synthesis).filter(([, v]) => v?.trim())
+  const entries = Object.entries(synthesis).filter(([, v]) => typeof v === 'string' ? v.trim() : v != null)
 
   if (entries.length === 0) {
     return <p className="text-sm text-gray-400 italic">No synthesis output available.</p>
