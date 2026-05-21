@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { getMeetingById } from '@/lib/db'
+import { callGemini } from '@/lib/gemini'
 
 export async function POST(
   _req: NextRequest,
@@ -10,11 +11,6 @@ export async function POST(
   const session = await getServerSession(authOptions)
   if (!session?.user?.email) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const apiKey = process.env.GEMINI_API_KEY
-  if (!apiKey) {
-    return NextResponse.json({ error: 'Gemini not configured' }, { status: 503 })
   }
 
   const meeting = await getMeetingById(params.id)
@@ -48,37 +44,18 @@ Agreed next steps: ${nextSteps}
 Write a concise, genuine follow-up email — not a template, not overly formal. 2-3 short paragraphs max.
 Return a JSON object with exactly two string fields: "subject" and "body" (plain text, no markdown).`
 
-  const geminiRes = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: 'application/json' },
-      }),
-    }
-  )
-
-  if (!geminiRes.ok) {
-    const err = await geminiRes.text()
-    console.error('Gemini draft failed:', err)
-    return NextResponse.json({ error: `Gemini error: ${geminiRes.status} — ${err}` }, { status: 502 })
-  }
-
-  const data = await geminiRes.json()
-  const raw = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '{}'
-
-  let draft: { subject: string; body: string }
   try {
-    draft = JSON.parse(raw)
-  } catch {
-    return NextResponse.json({ error: 'Could not parse email draft from Gemini' }, { status: 500 })
+    const raw = await callGemini(prompt, { jsonMode: true })
+    let draft: { subject: string; body: string }
+    try {
+      draft = JSON.parse(raw)
+    } catch {
+      return NextResponse.json({ error: 'Could not parse email draft from Gemini' }, { status: 500 })
+    }
+    return NextResponse.json({ to: prospectEmails, subject: draft.subject ?? '', body: draft.body ?? '' })
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : 'Unknown error'
+    console.error('Gemini draft failed:', msg)
+    return NextResponse.json({ error: msg }, { status: 502 })
   }
-
-  return NextResponse.json({
-    to: prospectEmails,
-    subject: draft.subject ?? '',
-    body: draft.body ?? '',
-  })
 }
