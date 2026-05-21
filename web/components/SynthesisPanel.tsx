@@ -49,7 +49,7 @@ function Section({ label, content }: { label: string; content: string }) {
 export default function SynthesisPanel({
   synthesis,
 }: {
-  synthesis: Record<string, string> | null
+  synthesis: Record<string, unknown> | null
 }) {
   if (!synthesis) {
     return (
