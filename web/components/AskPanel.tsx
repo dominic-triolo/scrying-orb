@@ -27,6 +27,8 @@ export default function AskPanel({ meetingId, hasTranscript }: AskPanelProps) {
     setLoading(true)
     setError(null)
     setQuestion('')
+    // Show the question immediately so the rep isn't staring at a blank screen
+    setHistory((prev) => [...prev, { question: q, answer: '' }])
 
     try {
       const res = await fetch(`/api/meetings/${meetingId}/ask`, {
@@ -36,12 +38,14 @@ export default function AskPanel({ meetingId, hasTranscript }: AskPanelProps) {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error ?? 'Failed to get answer')
-      setHistory((prev) => [...prev, { question: q, answer: data.answer }])
+      // Fill in the answer on the placeholder entry we added optimistically
+      setHistory((prev) => prev.map((p, i) => i === prev.length - 1 ? { ...p, answer: data.answer } : p))
       // Scroll to latest answer
       setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Unknown error')
-      // Restore question so user can retry
+      // Remove the optimistic placeholder and restore the question so the rep can retry
+      setHistory((prev) => prev.slice(0, -1))
       setQuestion(q)
     } finally {
       setLoading(false)
@@ -89,20 +93,20 @@ export default function AskPanel({ meetingId, hasTranscript }: AskPanelProps) {
             </div>
           ))}
 
-          {/* Loading indicator */}
-          {loading && (
-            <div className="flex justify-start">
-              <div className="rounded-2xl rounded-tl-sm bg-white border border-gray-200 px-4 py-3">
-                <div className="flex gap-1 items-center">
-                  <span className="h-1.5 w-1.5 rounded-full bg-gray-400 animate-bounce [animation-delay:-0.3s]" />
-                  <span className="h-1.5 w-1.5 rounded-full bg-gray-400 animate-bounce [animation-delay:-0.15s]" />
-                  <span className="h-1.5 w-1.5 rounded-full bg-gray-400 animate-bounce" />
-                </div>
-              </div>
-            </div>
-          )}
+              <div ref={bottomRef} />
+        </div>
+      )}
 
-          <div ref={bottomRef} />
+      {/* Loading indicator — shown even on first question */}
+      {loading && (
+        <div className="flex justify-start">
+          <div className="rounded-2xl rounded-tl-sm bg-white border border-gray-200 px-4 py-3">
+            <div className="flex gap-1 items-center">
+              <span className="h-1.5 w-1.5 rounded-full bg-gray-400 animate-bounce [animation-delay:-0.3s]" />
+              <span className="h-1.5 w-1.5 rounded-full bg-gray-400 animate-bounce [animation-delay:-0.15s]" />
+              <span className="h-1.5 w-1.5 rounded-full bg-gray-400 animate-bounce" />
+            </div>
+          </div>
         </div>
       )}
 
