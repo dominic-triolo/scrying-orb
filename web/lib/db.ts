@@ -15,14 +15,27 @@ export interface Meeting {
   attendees: string[]
 }
 
+export interface Deal {
+  id: string
+  name: string
+  stage: string
+  pipeline: string
+}
+
+export interface Contact {
+  email: string
+  hubspot_contact_id: string | null
+  deals: Deal[]
+}
+
 export interface MeetingDetail extends Meeting {
   recording_file_id: string | null
   transcript_copy_id: string | null
-  synthesis_output: Record<string, string> | null
+  synthesis_output: Record<string, unknown> | null
   transcript_text: string | null
   notes: string | null
   hubspot_deal_id: string | null
-  contacts: { email: string; hubspot_contact_id: string | null }[]
+  contacts: Contact[]
 }
 
 interface GetMeetingsOptions {
@@ -78,7 +91,11 @@ export async function getMeetingById(id: string): Promise<MeetingDetail | null> 
       m.hubspot_deal_id,
       COALESCE(
         json_agg(
-          json_build_object('email', mc.email, 'hubspot_contact_id', mc.hubspot_contact_id)
+          json_build_object(
+            'email', mc.email,
+            'hubspot_contact_id', mc.hubspot_contact_id,
+            'deals', COALESCE(mc.deals, '[]'::jsonb)
+          )
         ) FILTER (WHERE mc.email IS NOT NULL),
         '[]'
       ) AS contacts

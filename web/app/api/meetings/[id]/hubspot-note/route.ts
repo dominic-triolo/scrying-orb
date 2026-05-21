@@ -29,39 +29,51 @@ export async function POST(
     )
   }
 
-  const { body } = await req.json()
+  const { body, dealIds } = await req.json()
   if (!body?.trim()) {
     return NextResponse.json({ error: 'Note body is required' }, { status: 400 })
   }
-
-  // Use the Engagements v1 API — broader scope support than CRM v3 notes
-  const noteRes = await fetch('https://api.hubapi.com/engagements/v1/engagements', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      engagement: {
-        active: true,
-        type: 'NOTE',
-        timestamp: Date.now(),
-      },
-      associations: {
-        dealIds: [meeting.hubspot_deal_id],
-      },
-      metadata: {
-        body,
-      },
-    }),
-  })
-
-  if (!noteRes.ok) {
-    const err = await noteRes.text()
-    console.error('HubSpot note creation failed:', err)
-    return NextResponse.json({ error: 'Failed to create HubSpot note' }, { status: 502 })
+  if (!Array.isArray(dealIds) || dealIds.length === 0) {
+    return NextResponse.json({ error: 'At least one deal must be selected' }, { status: 400 })
   }
 
-  const note = await noteRes.json()
-  return NextResponse.json({ noteId: note.engagement?.id })
+  // Post a note to each selected deal via the Engagements v1 API
+  const results: { dealId: string; noteId: string | null; error: string | null }[] = []
+
+  for (const dealId of dealIds) {
+    const noteRes = await fetch('https://api.hubapi.com/engagements/v1/engagements', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        engagement: {
+          active: true,
+          type: 'NOTE',
+          timestamp: Date.now(),
+        },
+        associations: {
+          dealIds: [dealId],
+        },
+        metadata: { body },
+      }),
+    })
+
+    if (!noteRes.ok) {
+      const err = await noteRes.text()
+      console.error(`HubSpot note failed for deal ${dealId}:`, err)
+      results.push({ dealId, noteId: null, error: 'Failed to post note' })
+    } else {
+      const note = await noteRes.json()
+      results.push({ dealId, noteId: note.engagement?.id ?? null, error: null })
+    }
+  }
+
+  const allFailed = results.every((r) => r.error)
+  if (allFailed) {
+    return NextResponse.json({ error: 'Failed to post note to any deal' }, { status: 502 })
+  }
+
+  return NextResponse.json({ results })
 }

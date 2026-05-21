@@ -215,7 +215,6 @@ export default function MeetingPage() {
             {tab === 'outreach' && (
               <OutreachPanel
                 meetingId={meeting.id}
-                hubspotDealId={meeting.hubspot_deal_id}
                 summaryText={
                   typeof meeting.synthesis_output?.summary === 'string'
                     ? meeting.synthesis_output.summary

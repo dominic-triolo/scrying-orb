@@ -111,14 +111,20 @@ class DBClient:
             return
 
         sql = """
-            INSERT INTO meeting_contacts (meeting_id, email, hubspot_contact_id)
+            INSERT INTO meeting_contacts (meeting_id, email, hubspot_contact_id, deals)
             VALUES %s
             ON CONFLICT (meeting_id, email) DO UPDATE SET
-                hubspot_contact_id = COALESCE(EXCLUDED.hubspot_contact_id, meeting_contacts.hubspot_contact_id)
+                hubspot_contact_id = COALESCE(EXCLUDED.hubspot_contact_id, meeting_contacts.hubspot_contact_id),
+                deals = EXCLUDED.deals
         """
 
         values = tuple(
-            (meeting_id, c["email"], c.get("hubspot_contact_id"))
+            (
+                meeting_id,
+                c["email"],
+                c.get("hubspot_contact_id"),
+                json.dumps(c.get("deals", [])),
+            )
             for c in contacts
         )
 

@@ -1,5 +1,4 @@
 import logging
-from datetime import datetime, timezone
 
 import requests
 
@@ -8,6 +7,34 @@ from config import Config
 logger = logging.getLogger(__name__)
 
 HUBSPOT_BASE = "https://api.hubapi.com"
+
+PIPELINE_LABELS = {
+    '3350665': 'Host Pipeline',
+    '5932157': 'Trips Pipeline',
+}
+
+STAGE_LABELS = {
+    '109478269': 'Call Scheduled',
+    '143928967': 'Call Held',
+    '11444385':  'Created',
+    '11444387':  'Ready-To-Qualify',
+    '11444389':  'Qualifying',
+    '11444390':  'Qualified',
+    '11444391':  'Planning',
+    '11444483':  'Launched',
+    '11444484':  'Confirmed',
+    '11444485':  'Renewed',
+    '115825557': 'Pending',
+    '18279047':  'Created',
+    '18279048':  'Partner-Approved',
+    '18279049':  'Trova-Pricing-Approved',
+    '18279050':  'Host-Approved',
+    '18279051':  'Live',
+    '18279052':  'Ready-To-Confirm',
+    '115894141': 'Early-Confirmed',
+    '18279053':  'Confirmed',
+    '31398243':  'Closed',
+}
 
 
 class HubSpotClient:
@@ -26,23 +53,31 @@ class HubSpotClient:
     def resolve_contacts(self, emails: list[str]) -> list[dict]:
         """
         Look up each external participant email in HubSpot.
-        Returns a list of dicts: {email, hubspot_contact_id, hubspot_deal_id}.
-        Missing contacts get None for IDs — they are still included so the
-        email is stored in meeting_contacts.
+        Returns a list of dicts: {email, hubspot_contact_id, hubspot_deal_id, deals}.
+        - deals: list of {id, name, stage, pipeline} for all associated deals
+        - hubspot_deal_id: first deal's ID, kept for meetings.hubspot_deal_id (backward compat)
         """
         if not self._enabled or not emails:
-            return [{"email": e, "hubspot_contact_id": None, "hubspot_deal_id": None} for e in emails]
+            return [
+                {"email": e, "hubspot_contact_id": None, "hubspot_deal_id": None, "deals": []}
+                for e in emails
+            ]
 
         results = []
         for email in emails:
             contact_id = self._find_contact(email)
-            deal_id = self._find_deal_for_contact(contact_id) if contact_id else None
+            deals = self._find_deals_for_contact(contact_id) if contact_id else []
+            deal_id = deals[0]["id"] if deals else None
             results.append({
-                "email": email,
+                "email":              email,
                 "hubspot_contact_id": contact_id,
-                "hubspot_deal_id": deal_id,
+                "hubspot_deal_id":    deal_id,
+                "deals":              deals,
             })
-            logger.info(f"HubSpot: {email} → contact={contact_id} deal={deal_id}")
+            logger.info(
+                f"HubSpot: {email} → contact={contact_id} "
+                f"deals={[d['id'] for d in deals]}"
+            )
 
         return results
 
@@ -67,86 +102,46 @@ class HubSpotClient:
         results = resp.json().get("results", [])
         return results[0]["id"] if results else None
 
-    def _find_deal_for_contact(self, contact_id: str) -> str | None:
-        """Return the most recently modified open deal associated with this contact."""
+    def _find_deals_for_contact(self, contact_id: str) -> list[dict]:
+        """Return all deals associated with this contact, with name/stage/pipeline labels."""
         resp = requests.get(
             f"{HUBSPOT_BASE}/crm/v4/objects/contacts/{contact_id}/associations/deals",
             headers=self._headers(),
             timeout=10,
         )
         if resp.status_code == 404:
-            return None
+            return []
         resp.raise_for_status()
+
         results = resp.json().get("results", [])
         if not results:
-            return None
-        # Return the first associated deal ID (HubSpot returns them in recency order)
-        return str(results[0]["toObjectId"])
+            return []
 
-    def post_meeting_activity(
-        self,
-        row: dict,
-        synthesis: dict,
-        contacts: list[dict],
-        meeting_datetime: str | None,
-    ) -> str | None:
-        """
-        Create a meeting engagement in HubSpot and associate it with resolved contacts.
-        Returns the HubSpot engagement ID, or None on failure.
-        Fire-and-forget — caller should wrap in try/except.
-        """
-        if not self._enabled:
-            return None
+        deal_ids = [str(r["toObjectId"]) for r in results]
 
-        contact_ids = [c["hubspot_contact_id"] for c in contacts if c["hubspot_contact_id"]]
-        if not contact_ids:
-            logger.info("No resolved HubSpot contacts — skipping activity post")
-            return None
-
-        timestamp = None
-        if meeting_datetime:
-            try:
-                dt = datetime.fromisoformat(meeting_datetime.replace("Z", "+00:00"))
-                timestamp = int(dt.timestamp() * 1000)
-            except ValueError:
-                timestamp = int(datetime.now(timezone.utc).timestamp() * 1000)
-        else:
-            timestamp = int(datetime.now(timezone.utc).timestamp() * 1000)
-
-        summary = synthesis.get("summary", "")
-        next_steps = synthesis.get("next_steps", "")
-
-        body = {
-            "properties": {
-                "hs_meeting_title": row.get("meeting_name", "TrovaTrip Meeting"),
-                "hs_meeting_body": f"SUMMARY\n{summary}\n\nNEXT STEPS\n{next_steps}",
-                "hs_timestamp": timestamp,
-                "hs_meeting_outcome": "COMPLETED",
+        # Batch fetch deal properties
+        batch_resp = requests.post(
+            f"{HUBSPOT_BASE}/crm/v3/objects/deals/batch/read",
+            headers=self._headers(),
+            json={
+                "properties": ["dealname", "dealstage", "pipeline"],
+                "inputs": [{"id": did} for did in deal_ids],
             },
-        }
-
-        resp = requests.post(
-            f"{HUBSPOT_BASE}/crm/v3/objects/meetings",
-            headers=self._headers(),
-            json=body,
             timeout=10,
         )
-        resp.raise_for_status()
-        engagement_id = resp.json()["id"]
-        logger.info(f"Created HubSpot meeting engagement {engagement_id}")
+        batch_resp.raise_for_status()
 
-        # Associate with each resolved contact
-        for contact_id in contact_ids:
-            self._associate(engagement_id, contact_id)
+        deals = []
+        for deal in batch_resp.json().get("results", []):
+            props      = deal.get("properties", {})
+            stage_id   = props.get("dealstage", "")
+            pipeline_id = props.get("pipeline", "")
+            deals.append({
+                "id":       deal["id"],
+                "name":     props.get("dealname") or "Unnamed Deal",
+                "stage":    STAGE_LABELS.get(stage_id, stage_id),
+                "pipeline": PIPELINE_LABELS.get(pipeline_id, pipeline_id),
+            })
 
-        return engagement_id
-
-    def _associate(self, engagement_id: str, contact_id: str) -> None:
-        resp = requests.put(
-            f"{HUBSPOT_BASE}/crm/v4/objects/meetings/{engagement_id}/associations/contacts/{contact_id}",
-            headers=self._headers(),
-            json=[{"associationCategory": "HUBSPOT_DEFINED", "associationTypeId": 200}],
-            timeout=10,
-        )
-        if not resp.ok:
-            logger.warning(f"Failed to associate engagement {engagement_id} with contact {contact_id}: {resp.text}")
+        logger.info(f"Found {len(deals)} deal(s) for contact {contact_id}")
+        return deals
