@@ -13,6 +13,7 @@ export interface Meeting {
   rep_talk_pct: number | null
   prospect_talk_pct: number | null
   attendees: string[]
+  status: string | null
 }
 
 export interface Deal {
@@ -54,13 +55,14 @@ export async function getMeetings({ repEmail }: GetMeetingsOptions = {}): Promis
       m.recording_owner,
       m.rep_talk_pct,
       m.prospect_talk_pct,
+      m.status,
       COALESCE(
         array_agg(mc.email ORDER BY mc.email) FILTER (WHERE mc.email IS NOT NULL),
         '{}'
       ) AS attendees
     FROM meetings m
     LEFT JOIN meeting_contacts mc ON mc.meeting_id = m.id
-    WHERE m.status = 'complete'
+    WHERE m.status IN ('complete', 'pending_synthesis')
       AND ($1::text IS NULL OR m.recording_owner = $1)
     GROUP BY m.id
     ORDER BY m.meeting_datetime DESC NULLS LAST

@@ -19,9 +19,24 @@ export default function MeetingCard({ meeting }: { meeting: Meeting }) {
 
   return (
     <Link href={`/meetings/${meeting.id}`} className="block">
-      <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm hover:shadow-md hover:border-blue-300 transition-all">
+      <div className={`rounded-xl border bg-white p-5 shadow-sm hover:shadow-md transition-all ${
+        meeting.status === 'pending_synthesis'
+          ? 'border-amber-200 hover:border-amber-300 opacity-75'
+          : 'border-gray-200 hover:border-blue-300'
+      }`}>
         <div className="flex items-start justify-between gap-2 mb-3">
-          <TypeBadge type={meeting.meeting_type} />
+          <div className="flex items-center gap-2 flex-wrap">
+            <TypeBadge type={meeting.meeting_type} />
+            {meeting.status === 'pending_synthesis' && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 border border-amber-200 px-2 py-0.5 text-xs text-amber-700">
+                <svg className="h-3 w-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                </svg>
+                Re-synthesizing
+              </span>
+            )}
+          </div>
           <span className="text-xs text-gray-400 whitespace-nowrap">{formatDate(meeting.meeting_datetime)}</span>
         </div>
 
