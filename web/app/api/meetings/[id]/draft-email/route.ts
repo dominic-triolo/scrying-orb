@@ -49,7 +49,7 @@ Write a concise, genuine follow-up email — not a template, not overly formal. 
 Return a JSON object with exactly two string fields: "subject" and "body" (plain text, no markdown).`
 
   const geminiRes = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -63,7 +63,7 @@ Return a JSON object with exactly two string fields: "subject" and "body" (plain
   if (!geminiRes.ok) {
     const err = await geminiRes.text()
     console.error('Gemini draft failed:', err)
-    return NextResponse.json({ error: 'Failed to generate draft' }, { status: 502 })
+    return NextResponse.json({ error: `Gemini error: ${geminiRes.status} — ${err}` }, { status: 502 })
   }
 
   const data = await geminiRes.json()
