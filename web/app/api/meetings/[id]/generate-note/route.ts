@@ -4,6 +4,22 @@ import { authOptions } from '@/lib/auth'
 import { getMeetingById, getTemplate } from '@/lib/db'
 import { callGemini } from '@/lib/gemini'
 
+/** Strip HTML tags so rich-text template examples read as plain text in prompts */
+function stripHtml(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<\/li>/gi, '\n')
+    .replace(/<li>/gi, '• ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
 export async function POST(
   _req: NextRequest,
   { params }: { params: { id: string } }
@@ -40,7 +56,7 @@ export async function POST(
   // Build template guidance
   let templateSection = ''
   if (template?.note_example) {
-    templateSection = `\n\nEXAMPLE NOTE TO MATCH (tone, style, and format — do not copy verbatim):\n${template.note_example}`
+    templateSection = `\n\nEXAMPLE NOTE TO MATCH (tone, style, and format — do not copy verbatim):\n${stripHtml(template.note_example)}`
   }
 
   const prompt = `You are writing a concise internal HubSpot CRM note for a TrovaTrip sales rep after a ${meetingType} call.

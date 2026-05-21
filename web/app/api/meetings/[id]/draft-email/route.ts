@@ -4,6 +4,22 @@ import { authOptions } from '@/lib/auth'
 import { getMeetingById, getTemplate, getApprovedLinks } from '@/lib/db'
 import { callGemini } from '@/lib/gemini'
 
+/** Strip HTML tags so rich-text template examples read as plain text in prompts */
+function stripHtml(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<\/li>/gi, '\n')
+    .replace(/<li>/gi, '• ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
 export async function POST(
   _req: NextRequest,
   { params }: { params: { id: string } }
@@ -46,7 +62,7 @@ export async function POST(
       templateSection += `\nSubject: ${template.email_subject_example}`
     }
     if (template.email_body_example) {
-      templateSection += `\nBody:\n${template.email_body_example}`
+      templateSection += `\nBody:\n${stripHtml(template.email_body_example)}`
     }
   }
 

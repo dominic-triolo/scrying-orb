@@ -1,7 +1,8 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
+import RichEditor from '@/components/RichEditor'
 import type { Template, ApprovedLink } from '@/lib/db'
 
 const MEETING_TYPES = ['intro', 'planning', 'nurture'] as const
@@ -25,6 +26,23 @@ export default function TemplatesPage() {
   const [saving, setSaving] = useState<Record<string, boolean>>({})
   const [saved, setSaved] = useState<Record<string, boolean>>({})
 
+  // Subject is plain text — controlled per type
+  const [subjects, setSubjects] = useState<Record<string, string>>({})
+
+  // Editor refs — one note + one email body per meeting type
+  const introNoteRef    = useRef<HTMLDivElement>(null)
+  const introBodyRef    = useRef<HTMLDivElement>(null)
+  const planningNoteRef = useRef<HTMLDivElement>(null)
+  const planningBodyRef = useRef<HTMLDivElement>(null)
+  const nurtureNoteRef  = useRef<HTMLDivElement>(null)
+  const nurtureBodyRef  = useRef<HTMLDivElement>(null)
+
+  const editorRefs: Record<MeetingType, { note: React.RefObject<HTMLDivElement>; emailBody: React.RefObject<HTMLDivElement> }> = {
+    intro:    { note: introNoteRef,    emailBody: introBodyRef },
+    planning: { note: planningNoteRef, emailBody: planningBodyRef },
+    nurture:  { note: nurtureNoteRef,  emailBody: nurtureBodyRef },
+  }
+
   // Link add state
   const [newUrl, setNewUrl] = useState('')
   const [newLabel, setNewLabel] = useState('')
@@ -37,36 +55,38 @@ export default function TemplatesPage() {
       .then(({ templates: rows, links: linkRows }) => {
         const map: Record<string, Template> = {}
         for (const t of rows) map[t.meeting_type] = t
-        // Ensure all types have an entry
         for (const type of MEETING_TYPES) {
           if (!map[type]) map[type] = { meeting_type: type, note_example: '', email_subject_example: '', email_body_example: '' }
         }
         setTemplates(map)
+        const subjectMap: Record<string, string> = {}
+        for (const type of MEETING_TYPES) {
+          subjectMap[type] = map[type].email_subject_example ?? ''
+        }
+        setSubjects(subjectMap)
         setLinks(linkRows)
       })
       .finally(() => setLoading(false))
   }, [])
 
-  function updateTemplate(type: string, field: keyof Template, value: string) {
-    setTemplates((prev) => ({
-      ...prev,
-      [type]: { ...prev[type], [field]: value },
-    }))
-    setSaved((prev) => ({ ...prev, [type]: false }))
-  }
-
-  async function saveTemplate(type: string) {
+  async function saveTemplate(type: MeetingType) {
     setSaving((prev) => ({ ...prev, [type]: true }))
-    const t = templates[type]
+    const refs = editorRefs[type]
+    const note_example = refs.note.current?.innerHTML ?? ''
+    const email_body_example = refs.emailBody.current?.innerHTML ?? ''
+    const email_subject_example = subjects[type] ?? ''
+
     await fetch(`/api/templates/${type}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        note_example:          t.note_example,
-        email_subject_example: t.email_subject_example,
-        email_body_example:    t.email_body_example,
-      }),
+      body: JSON.stringify({ note_example, email_subject_example, email_body_example }),
     })
+
+    setTemplates((prev) => ({
+      ...prev,
+      [type]: { ...prev[type], note_example, email_subject_example, email_body_example },
+    }))
+
     setSaving((prev) => ({ ...prev, [type]: false }))
     setSaved((prev) => ({ ...prev, [type]: true }))
     setTimeout(() => setSaved((prev) => ({ ...prev, [type]: false })), 2000)
@@ -171,6 +191,7 @@ export default function TemplatesPage() {
           {activeTab !== 'links' && (() => {
             const type = activeTab as MeetingType
             const t = templates[type] ?? {}
+            const refs = editorRefs[type]
             return (
               <div className="max-w-3xl space-y-6 pb-12">
                 {/* HubSpot Note */}
@@ -179,12 +200,11 @@ export default function TemplatesPage() {
                   <p className="text-xs text-gray-500 mb-3">
                     Paste an example of a good HubSpot note for a {TYPE_LABELS[type].toLowerCase()}. Gemini will match this tone and format.
                   </p>
-                  <textarea
-                    value={t.note_example ?? ''}
-                    onChange={(e) => updateTemplate(type, 'note_example', e.target.value)}
-                    rows={8}
+                  <RichEditor
+                    initialHtml={t.note_example ?? ''}
+                    editorRef={refs.note}
+                    minHeight="min-h-[160px]"
                     placeholder={`Example HubSpot note for a ${TYPE_LABELS[type].toLowerCase()}…`}
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
                   />
                 </section>
 
@@ -198,20 +218,19 @@ export default function TemplatesPage() {
                     <div>
                       <label className="block text-xs font-medium text-gray-500 mb-1">Subject</label>
                       <input type="text"
-                        value={t.email_subject_example ?? ''}
-                        onChange={(e) => updateTemplate(type, 'email_subject_example', e.target.value)}
+                        value={subjects[type] ?? ''}
+                        onChange={(e) => setSubjects((prev) => ({ ...prev, [type]: e.target.value }))}
                         placeholder="Example subject line…"
                         className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
                       />
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-gray-500 mb-1">Body</label>
-                      <textarea
-                        value={t.email_body_example ?? ''}
-                        onChange={(e) => updateTemplate(type, 'email_body_example', e.target.value)}
-                        rows={10}
+                      <RichEditor
+                        initialHtml={t.email_body_example ?? ''}
+                        editorRef={refs.emailBody}
+                        minHeight="min-h-[220px]"
                         placeholder="Example email body…"
-                        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
                       />
                     </div>
                   </div>
@@ -237,7 +256,6 @@ export default function TemplatesPage() {
                   Gemini will only include these URLs in generated emails. If none are added, no links or placeholders will appear.
                 </p>
 
-                {/* Existing links */}
                 {links.length === 0 ? (
                   <p className="text-sm text-gray-400 italic mb-4">No approved links yet.</p>
                 ) : (
@@ -258,7 +276,6 @@ export default function TemplatesPage() {
                   </ul>
                 )}
 
-                {/* Add link form */}
                 <div className="border-t border-gray-100 pt-4 space-y-3">
                   <p className="text-xs font-medium text-gray-500">Add a link</p>
                   <div className="grid grid-cols-2 gap-3">
