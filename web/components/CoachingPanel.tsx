@@ -113,32 +113,40 @@ export default function CoachingPanel({ meetingId }: CoachingPanelProps) {
       setLoading(true)
       setError(null)
 
-      // Try GET first
-      const getRes = await fetch(`/api/meetings/${meetingId}/score`)
-      if (getRes.ok) {
-        setScore(await getRes.json())
-        setLoading(false)
-        return
+      /** Safe JSON parse — returns null if body is not JSON */
+      async function safeJson(res: Response): Promise<Record<string, unknown> | null> {
+        try { return await res.json() } catch { return null }
       }
 
-      if (getRes.status !== 404) {
-        const data = await getRes.json()
-        setError(data.error ?? 'Failed to load score')
-        setLoading(false)
-        return
-      }
+      try {
+        // Try GET first
+        const getRes = await fetch(`/api/meetings/${meetingId}/score`)
+        if (getRes.ok) {
+          setScore(await getRes.json())
+          return
+        }
 
-      // No score yet — auto-generate
-      setGenerating(true)
-      const postRes = await fetch(`/api/meetings/${meetingId}/score`, { method: 'POST' })
-      if (postRes.ok) {
-        setScore(await postRes.json())
-      } else {
-        const data = await postRes.json()
-        setError(data.error ?? 'Failed to generate score')
+        if (getRes.status !== 404) {
+          const data = await safeJson(getRes)
+          setError((data?.error as string) ?? `Server error ${getRes.status}`)
+          return
+        }
+
+        // No score yet — auto-generate
+        setGenerating(true)
+        const postRes = await fetch(`/api/meetings/${meetingId}/score`, { method: 'POST' })
+        if (postRes.ok) {
+          setScore(await postRes.json())
+        } else {
+          const data = await safeJson(postRes)
+          setError((data?.error as string) ?? `Server error ${postRes.status}`)
+        }
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : 'Unexpected error loading coaching data')
+      } finally {
+        setGenerating(false)
+        setLoading(false)
       }
-      setGenerating(false)
-      setLoading(false)
     }
 
     load()

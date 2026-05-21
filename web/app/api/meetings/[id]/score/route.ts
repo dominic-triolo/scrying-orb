@@ -74,18 +74,23 @@ export async function GET(
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const meeting = await getMeetingById(params.id)
-  if (!meeting) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  try {
+    const meeting = await getMeetingById(params.id)
+    if (!meeting) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
-  const score = await getMeetingScore(params.id)
-  if (!score) return NextResponse.json({ error: 'No score yet' }, { status: 404 })
+    const score = await getMeetingScore(params.id)
+    if (!score) return NextResponse.json({ error: 'No score yet' }, { status: 404 })
 
-  // Augment with talk ratio from meetings table
-  return NextResponse.json({
-    ...score,
-    rep_talk_pct: meeting.rep_talk_pct,
-    prospect_talk_pct: meeting.prospect_talk_pct,
-  })
+    return NextResponse.json({
+      ...score,
+      rep_talk_pct: meeting.rep_talk_pct,
+      prospect_talk_pct: meeting.prospect_talk_pct,
+    })
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : 'Database error'
+    console.error('GET score error:', msg)
+    return NextResponse.json({ error: msg }, { status: 500 })
+  }
 }
 
 export async function POST(
