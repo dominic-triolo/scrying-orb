@@ -23,20 +23,22 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  const { to, subject, body } = await req.json()
+  const { to, cc, subject, body } = await req.json()
   if (!to || !subject || !body) {
     return NextResponse.json({ error: 'Missing required fields: to, subject, body' }, { status: 400 })
   }
 
-  // Build RFC 2822 message
-  const message = [
+  // Build RFC 2822 HTML message
+  const headers: string[] = [
     `To: ${to}`,
+    ...(cc ? [`Cc: ${cc}`] : []),
     `Subject: ${subject}`,
     `MIME-Version: 1.0`,
-    `Content-Type: text/plain; charset=utf-8`,
+    `Content-Type: text/html; charset=utf-8`,
     '',
-    body,
-  ].join('\r\n')
+  ]
+  const htmlBody = `<!DOCTYPE html><html><body style="font-family:sans-serif;font-size:14px;line-height:1.6;">${body}</body></html>`
+  const message = [...headers, htmlBody].join('\r\n')
 
   const raw = Buffer.from(message).toString('base64url')
 
