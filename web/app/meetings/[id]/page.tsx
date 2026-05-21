@@ -7,9 +7,11 @@ import TypeBadge from '@/components/TypeBadge'
 import SynthesisPanel from '@/components/SynthesisPanel'
 import OutreachPanel from '@/components/OutreachPanel'
 import AskPanel from '@/components/AskPanel'
+import CoachingPanel from '@/components/CoachingPanel'
 import type { MeetingDetail } from '@/lib/db'
 
 const MEETING_TYPES = ['intro', 'planning', 'nurture']
+const SCOREABLE_TYPES = ['intro', 'planning']
 
 function formatDate(iso: string | null): string {
   if (!iso) return 'Unknown date'
@@ -18,7 +20,7 @@ function formatDate(iso: string | null): string {
   })
 }
 
-type Tab = 'analysis' | 'transcript' | 'attendees' | 'outreach' | 'ask'
+type Tab = 'analysis' | 'transcript' | 'attendees' | 'outreach' | 'ask' | 'coaching'
 
 export default function MeetingPage() {
   const { id } = useParams<{ id: string }>()
@@ -26,9 +28,17 @@ export default function MeetingPage() {
   const [meeting, setMeeting] = useState<MeetingDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<Tab>('analysis')
+  const [isLeadershipUser, setIsLeadershipUser] = useState(false)
   const [typeEdit, setTypeEdit] = useState(false)
   const [savingType, setSavingType] = useState(false)
   const [selectedType, setSelectedType] = useState('')
+
+  useEffect(() => {
+    fetch('/api/me')
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => { if (data?.isLeadership) setIsLeadershipUser(true) })
+      .catch(() => {})
+  }, [])
 
   useEffect(() => {
     fetch(`/api/meetings/${id}`)
@@ -69,12 +79,15 @@ export default function MeetingPage() {
 
   if (!meeting) return null
 
+  const isScoreable = SCOREABLE_TYPES.includes(meeting.meeting_type ?? '')
+
   const tabs: { key: Tab; label: string }[] = [
     { key: 'analysis', label: 'AI Analysis' },
     { key: 'transcript', label: 'Transcript' },
     { key: 'attendees', label: `Attendees (${meeting.contacts.length})` },
     { key: 'outreach', label: 'Outreach' },
     { key: 'ask', label: 'Ask' },
+    ...(isScoreable ? [{ key: 'coaching' as Tab, label: 'Coaching' }] : []),
   ]
 
   return (
@@ -104,6 +117,17 @@ export default function MeetingPage() {
             </svg>
             Templates
           </Link>
+          {isLeadershipUser && (
+            <Link
+              href="/scorecard-setup"
+              className="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-slate-400 hover:bg-slate-800 hover:text-white transition-colors"
+            >
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+              </svg>
+              Scorecard Setup
+            </Link>
+          )}
         </nav>
       </aside>
 
@@ -240,6 +264,10 @@ export default function MeetingPage() {
                 }
                 contacts={meeting.contacts}
               />
+            )}
+
+            {tab === 'coaching' && isScoreable && (
+              <CoachingPanel meetingId={meeting.id} />
             )}
 
             {tab === 'attendees' && (

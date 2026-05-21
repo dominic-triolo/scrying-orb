@@ -171,6 +171,186 @@ export async function deleteApprovedLink(id: string): Promise<void> {
   await pool.query('DELETE FROM approved_links WHERE id = $1', [id])
 }
 
+// ── Scoring ───────────────────────────────────────────────────────────────────
+
+export interface ScorecardSection {
+  id: string
+  scorecard_id: string
+  title: string
+  description_min: string | null
+  description_mid: string | null
+  description_max: string | null
+  weight: number | null
+  sort_order: number
+}
+
+export interface Scorecard {
+  id: string
+  meeting_type: string
+  min_score: number
+  mid_score: number
+  max_score: number
+  formatting_prompt: string | null
+  sections: ScorecardSection[]
+}
+
+export interface SectionScore {
+  section_id: string
+  title: string
+  score: number
+  reasoning: string
+}
+
+export interface MeetingScore {
+  id: string
+  meeting_id: string
+  section_scores: SectionScore[]
+  overall_score: number | null
+  coaching_output: string | null
+  max_score: number
+  created_at: string
+}
+
+export async function getScorecard(meetingType: string): Promise<Scorecard | null> {
+  const { rows: cards } = await pool.query<Omit<Scorecard, 'sections'>>(
+    'SELECT id, meeting_type, min_score, mid_score, max_score, formatting_prompt FROM scorecards WHERE meeting_type = $1',
+    [meetingType]
+  )
+  if (!cards[0]) return null
+  const card = cards[0]
+  const { rows: sections } = await pool.query<ScorecardSection>(
+    'SELECT id, scorecard_id, title, description_min, description_mid, description_max, weight, sort_order FROM scorecard_sections WHERE scorecard_id = $1 ORDER BY sort_order ASC',
+    [card.id]
+  )
+  return { ...card, sections }
+}
+
+export async function getAllScorecards(): Promise<Scorecard[]> {
+  const { rows: cards } = await pool.query<Omit<Scorecard, 'sections'>>(
+    'SELECT id, meeting_type, min_score, mid_score, max_score, formatting_prompt FROM scorecards ORDER BY meeting_type'
+  )
+  if (cards.length === 0) return []
+  const ids = cards.map((c) => c.id)
+  const { rows: sections } = await pool.query<ScorecardSection>(
+    `SELECT id, scorecard_id, title, description_min, description_mid, description_max, weight, sort_order
+     FROM scorecard_sections WHERE scorecard_id = ANY($1) ORDER BY sort_order ASC`,
+    [ids]
+  )
+  return cards.map((card) => ({
+    ...card,
+    sections: sections.filter((s) => s.scorecard_id === card.id),
+  }))
+}
+
+export async function upsertScorecard(
+  meetingType: string,
+  data: {
+    min_score: number
+    mid_score: number
+    max_score: number
+    formatting_prompt: string | null
+    sections: Array<{
+      title: string
+      description_min: string | null
+      description_mid: string | null
+      description_max: string | null
+      weight: number | null
+      sort_order: number
+    }>
+  }
+): Promise<void> {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    // Upsert scorecard
+    const { rows } = await client.query<{ id: string }>(
+      `INSERT INTO scorecards (meeting_type, min_score, mid_score, max_score, formatting_prompt, updated_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())
+       ON CONFLICT (meeting_type) DO UPDATE SET
+         min_score         = EXCLUDED.min_score,
+         mid_score         = EXCLUDED.mid_score,
+         max_score         = EXCLUDED.max_score,
+         formatting_prompt = EXCLUDED.formatting_prompt,
+         updated_at        = NOW()
+       RETURNING id`,
+      [meetingType, data.min_score, data.mid_score, data.max_score, data.formatting_prompt]
+    )
+    const scorecardId = rows[0].id
+    // Replace sections atomically
+    await client.query('DELETE FROM scorecard_sections WHERE scorecard_id = $1', [scorecardId])
+    for (const s of data.sections) {
+      await client.query(
+        `INSERT INTO scorecard_sections
+           (scorecard_id, title, description_min, description_mid, description_max, weight, sort_order)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [scorecardId, s.title, s.description_min, s.description_mid, s.description_max, s.weight, s.sort_order]
+      )
+    }
+    await client.query('COMMIT')
+  } catch (err) {
+    await client.query('ROLLBACK')
+    throw err
+  } finally {
+    client.release()
+  }
+}
+
+export async function getMeetingScore(meetingId: string): Promise<MeetingScore | null> {
+  const { rows } = await pool.query<MeetingScore>(
+    `SELECT ms.id, ms.meeting_id, ms.section_scores, ms.overall_score,
+            ms.coaching_output, ms.max_score, ms.created_at,
+            m.rep_talk_pct, m.prospect_talk_pct
+     FROM meeting_scores ms
+     JOIN meetings m ON m.id = ms.meeting_id
+     WHERE ms.meeting_id = $1`,
+    [meetingId]
+  )
+  return rows[0] ?? null
+}
+
+export async function saveMeetingScore(
+  meetingId: string,
+  data: {
+    section_scores: SectionScore[]
+    overall_score: number
+    coaching_output: string
+    max_score: number
+    rep_talk_pct: number | null
+    prospect_talk_pct: number | null
+  }
+): Promise<MeetingScore> {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    // Store talk ratio on meetings table (columns already exist)
+    if (data.rep_talk_pct !== null && data.prospect_talk_pct !== null) {
+      await client.query(
+        'UPDATE meetings SET rep_talk_pct = $1, prospect_talk_pct = $2 WHERE id = $3',
+        [data.rep_talk_pct, data.prospect_talk_pct, meetingId]
+      )
+    }
+    const { rows } = await client.query<MeetingScore>(
+      `INSERT INTO meeting_scores (meeting_id, section_scores, overall_score, coaching_output, max_score)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (meeting_id) DO UPDATE SET
+         section_scores  = EXCLUDED.section_scores,
+         overall_score   = EXCLUDED.overall_score,
+         coaching_output = EXCLUDED.coaching_output,
+         max_score       = EXCLUDED.max_score,
+         updated_at      = NOW()
+       RETURNING *`,
+      [meetingId, JSON.stringify(data.section_scores), data.overall_score, data.coaching_output, data.max_score]
+    )
+    await client.query('COMMIT')
+    return rows[0]
+  } catch (err) {
+    await client.query('ROLLBACK')
+    throw err
+  } finally {
+    client.release()
+  }
+}
+
 // ── Meeting type ──────────────────────────────────────────────────────────────
 
 export async function updateMeetingType(

@@ -1,5 +1,6 @@
 'use client'
 
+import { useEffect, useState } from 'react'
 import { useSession, signOut } from 'next-auth/react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
@@ -29,6 +30,14 @@ export default function Sidebar({
   const { data: session } = useSession()
   const pathname = usePathname()
   const isHome = pathname === '/'
+  const [isLeadershipUser, setIsLeadershipUser] = useState(false)
+
+  useEffect(() => {
+    fetch('/api/me')
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => { if (data?.isLeadership) setIsLeadershipUser(true) })
+      .catch(() => {})
+  }, [])
 
   return (
     <aside className="flex h-screen w-64 flex-shrink-0 flex-col bg-slate-900 text-white">
@@ -62,6 +71,19 @@ export default function Sidebar({
           </svg>
           Templates
         </Link>
+        {isLeadershipUser && (
+          <Link
+            href="/scorecard-setup"
+            className={`flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+              pathname === '/scorecard-setup' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+            }`}
+          >
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+            </svg>
+            Scorecard Setup
+          </Link>
+        )}
       </nav>
 
       {/* Search & Filters — only on home page */}
