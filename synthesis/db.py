@@ -103,6 +103,55 @@ class DBClient:
         logger.info(f"Upserted meeting {meeting_id} ({row['pairing_key']})")
         return meeting_id
 
+    def get_pending_resynthesis(self) -> list[dict]:
+        """
+        Return meetings that need re-synthesis due to a manual type change.
+        These already have transcript_text stored, so no Drive read is needed.
+        """
+        sql = """
+            SELECT id, meeting_type, transcript_text, recording_owner
+            FROM meetings
+            WHERE status = 'pending_synthesis'
+              AND transcript_text IS NOT NULL
+            ORDER BY updated_at ASC
+            LIMIT 10
+        """
+        with self._connect() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(sql)
+                return [dict(r) for r in cur.fetchall()]
+
+    def complete_resynthesis(
+        self,
+        meeting_id: str,
+        synthesis: dict,
+        talk_ratio: dict,
+    ) -> None:
+        """
+        Write re-synthesis results back and mark the meeting complete.
+        """
+        now = datetime.now(timezone.utc)
+        sql = """
+            UPDATE meetings SET
+                synthesis_output  = %(synthesis_output)s,
+                rep_talk_pct      = %(rep_talk_pct)s,
+                prospect_talk_pct = %(prospect_talk_pct)s,
+                status            = 'complete',
+                synthesized_at    = %(synthesized_at)s
+            WHERE id = %(id)s
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, {
+                    "id":               meeting_id,
+                    "synthesis_output": psycopg2.extras.Json(synthesis),
+                    "rep_talk_pct":     talk_ratio.get("rep_talk_pct"),
+                    "prospect_talk_pct": talk_ratio.get("prospect_talk_pct"),
+                    "synthesized_at":   now,
+                })
+                conn.commit()
+        logger.info(f"Re-synthesis complete for meeting {meeting_id}")
+
     def upsert_contacts(self, meeting_id: str, contacts: list[dict]) -> None:
         """
         Insert or update meeting_contacts rows for all resolved external participants.

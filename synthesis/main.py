@@ -86,23 +86,53 @@ def process_row(
         sheet.mark_error(row["row_index"], str(err))
 
 
+def resynthesize_meeting(
+    meeting: dict,
+    gemini: GeminiClient,
+    db: DBClient,
+) -> None:
+    """
+    Re-run Gemini synthesis on a meeting whose type was changed manually.
+    Uses the transcript already stored in Postgres — no Sheet or Drive access needed.
+    """
+    meeting_id   = str(meeting["id"])
+    meeting_type = meeting["meeting_type"]
+    transcript   = meeting["transcript_text"]
+    recording_owner = meeting.get("recording_owner", "")
+
+    logger.info(f"Re-synthesizing meeting {meeting_id} as type={meeting_type}")
+    try:
+        talk_ratio = compute_talk_ratio(transcript, recording_owner)
+        synthesis  = gemini.synthesize(transcript, meeting_type)
+        db.complete_resynthesis(meeting_id, synthesis, talk_ratio)
+        logger.info(f"Re-synthesis done for {meeting_id}")
+    except Exception as err:
+        logger.error(f"Re-synthesis error for {meeting_id}: {err}", exc_info=True)
+
+
 def run() -> None:
     logger.info("Synthesis service starting up")
     config = Config.from_env()
 
-    sheet  = SheetClient(config)
-    drive  = DriveClient(config)
-    gemini = GeminiClient(config)
+    sheet   = SheetClient(config)
+    drive   = DriveClient(config)
+    gemini  = GeminiClient(config)
     hubspot = HubSpotClient(config)
-    db     = DBClient(config)
+    db      = DBClient(config)
 
     logger.info(f"Polling every {config.poll_interval_seconds}s")
 
     while True:
         try:
+            # 1. New meetings from the Google Sheet
             pending = sheet.get_pending_rows()
             for row in pending:
                 process_row(row, sheet, drive, gemini, hubspot, db)
+
+            # 2. Meetings queued for re-synthesis due to manual type change
+            for meeting in db.get_pending_resynthesis():
+                resynthesize_meeting(meeting, gemini, db)
+
         except Exception as poll_err:
             logger.error(f"Poller error: {poll_err}", exc_info=True)
 
