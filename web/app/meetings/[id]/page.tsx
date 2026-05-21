@@ -6,6 +6,7 @@ import Link from 'next/link'
 import TypeBadge from '@/components/TypeBadge'
 import SynthesisPanel from '@/components/SynthesisPanel'
 import OutreachPanel from '@/components/OutreachPanel'
+import AskPanel from '@/components/AskPanel'
 import type { MeetingDetail } from '@/lib/db'
 
 const MEETING_TYPES = ['intro', 'planning', 'nurture']
@@ -17,7 +18,7 @@ function formatDate(iso: string | null): string {
   })
 }
 
-type Tab = 'analysis' | 'transcript' | 'attendees' | 'outreach'
+type Tab = 'analysis' | 'transcript' | 'attendees' | 'outreach' | 'ask'
 
 export default function MeetingPage() {
   const { id } = useParams<{ id: string }>()
@@ -73,6 +74,7 @@ export default function MeetingPage() {
     { key: 'transcript', label: 'Transcript' },
     { key: 'attendees', label: `Attendees (${meeting.contacts.length})` },
     { key: 'outreach', label: 'Outreach' },
+    { key: 'ask', label: 'Ask' },
   ]
 
   return (
@@ -210,6 +212,13 @@ export default function MeetingPage() {
               ) : (
                 <p className="text-sm text-gray-400 italic">Transcript not yet available.</p>
               )
+            )}
+
+            {tab === 'ask' && (
+              <AskPanel
+                meetingId={meeting.id}
+                hasTranscript={!!meeting.transcript_text}
+              />
             )}
 
             {tab === 'outreach' && (
