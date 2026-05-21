@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { getMeetingById } from '@/lib/db'
+import { getMeetingById, getTemplate, getApprovedLinks } from '@/lib/db'
 import { callGemini } from '@/lib/gemini'
 
 export async function POST(
@@ -26,20 +26,51 @@ export async function POST(
     )
   }
 
+  const meetingType = meeting.meeting_type ?? 'nurture'
+  const [template, approvedLinks] = await Promise.all([
+    getTemplate(meetingType),
+    getApprovedLinks(),
+  ])
+
   const repFirstName = (meeting.recording_owner ?? '').split('@')[0]
   const prospectEmails = meeting.contacts.map((c) => c.email).join(', ')
   const nextSteps = Array.isArray(synthesis.next_steps)
     ? (synthesis.next_steps as string[]).join('; ')
     : (synthesis.next_steps as string) ?? ''
 
+  // Build template guidance section
+  let templateSection = ''
+  if (template?.email_subject_example || template?.email_body_example) {
+    templateSection = `\n\nEXAMPLE EMAIL TO MATCH (tone, style, and format — do not copy verbatim):`
+    if (template.email_subject_example) {
+      templateSection += `\nSubject: ${template.email_subject_example}`
+    }
+    if (template.email_body_example) {
+      templateSection += `\nBody:\n${template.email_body_example}`
+    }
+  }
+
+  // Build link guidance section
+  let linkSection = ''
+  if (approvedLinks.length > 0) {
+    linkSection = `\n\nAPPROVED LINKS (you may include any of these if relevant — use the exact URLs provided):\n`
+    linkSection += approvedLinks.map((l) => `- ${l.label}: ${l.url}`).join('\n')
+    linkSection += `\n\nIMPORTANT: Only use URLs from the approved list above. Do NOT invent URLs, use placeholder text like [LINK], or include any other URLs.`
+  } else {
+    linkSection = `\n\nIMPORTANT: Do NOT include any URLs, hyperlinks, or placeholder text for links (e.g. [LINK], [ACCOUNT ACTIVATION LINK]) in this email. No links of any kind.`
+  }
+
   const prompt = `You are drafting a brief, warm follow-up email from a TrovaTrip sales rep to a prospect after a call.
 
 Rep: ${repFirstName}
 Prospect email(s): ${prospectEmails}
 Meeting: ${meeting.meeting_name}
+Meeting type: ${meetingType}
 
 Summary of the call: ${synthesis.summary ?? ''}
 Agreed next steps: ${nextSteps}
+${templateSection}
+${linkSection}
 
 Write a concise, genuine follow-up email — not a template, not overly formal. 2-3 short paragraphs max.
 Return a JSON object with exactly two string fields: "subject" and "body" (plain text, no markdown).`

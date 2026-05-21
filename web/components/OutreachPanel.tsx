@@ -202,6 +202,10 @@ export default function OutreachPanel({ meetingId, summaryText, contacts }: Outr
   const [noteSuccess, setNoteSuccess] = useState(false)
   const [noteError, setNoteError] = useState<string | null>(null)
 
+  // Note generation state
+  const [generatingNote, setGeneratingNote] = useState(false)
+  const [noteGenError, setNoteGenError] = useState<string | null>(null)
+
   // Email state
   const [emailDraft, setEmailDraft] = useState<{
     to: string; cc: string; subject: string; body: string
@@ -218,6 +222,20 @@ export default function OutreachPanel({ meetingId, summaryText, contacts }: Outr
       next.has(id) ? next.delete(id) : next.add(id)
       return next
     })
+  }
+
+  async function generateNote() {
+    setGeneratingNote(true); setNoteGenError(null)
+    try {
+      const res = await fetch(`/api/meetings/${meetingId}/generate-note`, { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error ?? 'Failed to generate note')
+      setNoteBody(data.note)
+    } catch (err: unknown) {
+      setNoteGenError(err instanceof Error ? err.message : 'Unknown error')
+    } finally {
+      setGeneratingNote(false)
+    }
   }
 
   async function submitNote() {
@@ -322,8 +340,14 @@ export default function OutreachPanel({ meetingId, summaryText, contacts }: Outr
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
               placeholder="Meeting summary…"
             />
+            {noteGenError && <p className="mt-2 text-xs text-red-600">{noteGenError}</p>}
             {noteError && <p className="mt-2 text-xs text-red-600">{noteError}</p>}
-            <div className="mt-3 flex justify-end">
+            <div className="mt-3 flex items-center justify-between">
+              <button onClick={generateNote} disabled={generatingNote}
+                className="text-xs text-gray-500 hover:text-gray-700 transition-colors disabled:opacity-50"
+              >
+                {generatingNote ? 'Generating…' : noteBody.trim() ? 'Regenerate with AI' : 'Generate with AI'}
+              </button>
               <button onClick={submitNote}
                 disabled={noteSubmitting || !noteBody.trim() || selectedDealIds.size === 0}
                 className="rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50 transition-colors"
@@ -331,6 +355,7 @@ export default function OutreachPanel({ meetingId, summaryText, contacts }: Outr
                 {noteSubmitting ? 'Posting…' : `Post to HubSpot${selectedDealIds.size > 1 ? ` (${selectedDealIds.size} deals)` : ''}`}
               </button>
             </div>
+
           </>
         )}
       </section>
