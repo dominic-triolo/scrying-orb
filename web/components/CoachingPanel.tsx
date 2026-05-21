@@ -80,7 +80,9 @@ function TalkRatioBar({ repPct, prospectPct }: { repPct: number | null; prospect
 }
 
 function ScoreBadge({ score, maxScore, size = 'sm' }: { score: number; maxScore: number; size?: 'sm' | 'lg' }) {
-  const pct = maxScore > 0 ? score / maxScore : 0
+  const s = Number(score)
+  const mx = Number(maxScore)
+  const pct = mx > 0 ? s / mx : 0
   const color = pct >= 0.8 ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
     : pct >= 0.55 ? 'text-blue-700 bg-blue-50 border-blue-200'
     : 'text-amber-700 bg-amber-50 border-amber-200'
@@ -88,14 +90,14 @@ function ScoreBadge({ score, maxScore, size = 'sm' }: { score: number; maxScore:
   if (size === 'lg') {
     return (
       <div className={`inline-flex flex-col items-center rounded-2xl border-2 px-6 py-3 ${color}`}>
-        <span className="text-4xl font-bold leading-none">{score.toFixed(1)}</span>
-        <span className="text-sm mt-1 opacity-70">/ {maxScore}</span>
+        <span className="text-4xl font-bold leading-none">{s.toFixed(1)}</span>
+        <span className="text-sm mt-1 opacity-70">/ {mx}</span>
       </div>
     )
   }
   return (
     <span className={`inline-block rounded-full border px-2.5 py-0.5 text-sm font-semibold ${color}`}>
-      {score.toFixed(1)} / {maxScore}
+      {s.toFixed(1)} / {mx}
     </span>
   )
 }

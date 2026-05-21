@@ -299,9 +299,12 @@ export async function upsertScorecard(
 
 export async function getMeetingScore(meetingId: string): Promise<MeetingScore | null> {
   const { rows } = await pool.query<MeetingScore>(
-    `SELECT ms.id, ms.meeting_id, ms.section_scores, ms.overall_score,
-            ms.coaching_output, ms.max_score, ms.created_at,
-            m.rep_talk_pct, m.prospect_talk_pct
+    `SELECT ms.id, ms.meeting_id, ms.section_scores,
+            ms.overall_score::float  AS overall_score,
+            ms.max_score::float      AS max_score,
+            ms.coaching_output, ms.created_at,
+            m.rep_talk_pct::float    AS rep_talk_pct,
+            m.prospect_talk_pct::float AS prospect_talk_pct
      FROM meeting_scores ms
      JOIN meetings m ON m.id = ms.meeting_id
      WHERE ms.meeting_id = $1`,
