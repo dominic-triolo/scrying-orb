@@ -158,8 +158,10 @@ export default function ScorecardSetupPage() {
             })),
         }),
       })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error ?? 'Failed to save')
+      const text = await res.text()
+      let data: Record<string, unknown> = {}
+      try { data = JSON.parse(text) } catch { /* non-JSON response */ }
+      if (!res.ok) throw new Error((data.error as string) ?? `Server error ${res.status} — check that migration 004_scoring.sql has been run`)
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch (err: unknown) {

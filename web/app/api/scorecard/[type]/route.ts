@@ -19,8 +19,14 @@ export async function GET(
   if (!session?.user?.email) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
-  const scorecard = await getScorecard(params.type)
-  return NextResponse.json(scorecard ?? null)
+  try {
+    const scorecard = await getScorecard(params.type)
+    return NextResponse.json(scorecard ?? null)
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : 'Database error'
+    console.error('GET scorecard error:', msg)
+    return NextResponse.json({ error: msg }, { status: 500 })
+  }
 }
 
 export async function PUT(
@@ -35,27 +41,44 @@ export async function PUT(
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
-  const { min_score, mid_score, max_score, formatting_prompt, sections } = await req.json()
-
   if (!['intro', 'planning'].includes(params.type)) {
     return NextResponse.json({ error: 'Scorecards only supported for intro and planning meetings' }, { status: 400 })
   }
 
-  await upsertScorecard(params.type, {
-    min_score: Number(min_score) || 1,
-    mid_score: Number(mid_score) || 3,
-    max_score: Number(max_score) || 5,
-    formatting_prompt: formatting_prompt ?? null,
-    sections: (sections ?? []).map((s: Record<string, unknown>, i: number) => ({
-      title: String(s.title ?? ''),
-      description_min: s.description_min ? String(s.description_min) : null,
-      description_mid: s.description_mid ? String(s.description_mid) : null,
-      description_max: s.description_max ? String(s.description_max) : null,
-      weight: s.weight !== '' && s.weight != null ? Number(s.weight) : null,
-      sort_order: i,
-    })),
-  })
+  let body: Record<string, unknown>
+  try {
+    body = await req.json()
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
+  }
 
-  const updated = await getScorecard(params.type)
-  return NextResponse.json(updated)
+  const { min_score, mid_score, max_score, formatting_prompt, sections } = body
+
+  try {
+    await upsertScorecard(params.type, {
+      min_score: Number(min_score) || 1,
+      mid_score: Number(mid_score) || 3,
+      max_score: Number(max_score) || 5,
+      formatting_prompt: formatting_prompt ? String(formatting_prompt) : null,
+      sections: (Array.isArray(sections) ? sections : []).map((s: Record<string, unknown>, i: number) => ({
+        title: String(s.title ?? ''),
+        description_min: s.description_min ? String(s.description_min) : null,
+        description_mid: s.description_mid ? String(s.description_mid) : null,
+        description_max: s.description_max ? String(s.description_max) : null,
+        weight: s.weight !== '' && s.weight != null ? Number(s.weight) : null,
+        sort_order: i,
+      })),
+    })
+
+    const updated = await getScorecard(params.type)
+    return NextResponse.json(updated)
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : 'Database error'
+    console.error('PUT scorecard error:', msg)
+    // Surface a helpful message if the migration hasn't been run
+    const hint = msg.includes('relation') || msg.includes('does not exist')
+      ? ' — make sure you have run migration 004_scoring.sql in your database'
+      : ''
+    return NextResponse.json({ error: msg + hint }, { status: 500 })
+  }
 }
