@@ -245,9 +245,9 @@ export default function MeetingPage() {
                       {meeting.contacts.map((c) => (
                         <li key={c.email} className="flex items-center justify-between">
                           <span className="text-sm text-gray-800">{c.email}</span>
-                          {c.hubspot_contact_id && (
+                          {c.hubspot_contact_id && process.env.NEXT_PUBLIC_HUBSPOT_PORTAL_ID && (
                             <a
-                              href={`https://app.hubspot.com/contacts/${c.hubspot_contact_id}`}
+                              href={`https://app.hubspot.com/contacts/${process.env.NEXT_PUBLIC_HUBSPOT_PORTAL_ID}/contact/${c.hubspot_contact_id}`}
                               target="_blank"
                               rel="noopener noreferrer"
                               className="text-xs text-blue-600 hover:underline"
