@@ -58,7 +58,7 @@ export default function OutreachPanel({ meetingId, summaryText, contacts }: Outr
       const res = await fetch(`/api/meetings/${meetingId}/hubspot-note`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ body: noteBody, dealIds: [...selectedDealIds] }),
+        body: JSON.stringify({ body: noteBody, dealIds: Array.from(selectedDealIds) }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error ?? 'Failed to post note')
