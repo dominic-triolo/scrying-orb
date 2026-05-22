@@ -356,7 +356,40 @@ export async function saveMeetingScore(
   }
 }
 
-// ── Meeting type ──────────────────────────────────────────────────────────────
+// ── Meeting type config ───────────────────────────────────────────────────────
+
+export interface MeetingTypeConfig {
+  id: string
+  label: string
+  scoreable: boolean
+  sort_order: number
+}
+
+export async function getMeetingTypes(): Promise<MeetingTypeConfig[]> {
+  const { rows } = await pool.query<MeetingTypeConfig>(
+    'SELECT id, label, scoreable, sort_order FROM meeting_types ORDER BY sort_order ASC, id ASC'
+  )
+  return rows
+}
+
+export async function upsertMeetingType(t: MeetingTypeConfig): Promise<void> {
+  await pool.query(
+    `INSERT INTO meeting_types (id, label, scoreable, sort_order, updated_at)
+     VALUES ($1, $2, $3, $4, NOW())
+     ON CONFLICT (id) DO UPDATE SET
+       label      = EXCLUDED.label,
+       scoreable  = EXCLUDED.scoreable,
+       sort_order = EXCLUDED.sort_order,
+       updated_at = NOW()`,
+    [t.id, t.label, t.scoreable, t.sort_order]
+  )
+}
+
+export async function deleteMeetingType(id: string): Promise<void> {
+  await pool.query('DELETE FROM meeting_types WHERE id = $1', [id])
+}
+
+// ── Meeting type (per-meeting update) ────────────────────────────────────────
 
 export async function updateMeetingType(
   id: string,

@@ -1,101 +1,94 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import RichEditor from '@/components/RichEditor'
 import type { Template, ApprovedLink } from '@/lib/db'
 
-const MEETING_TYPES = ['intro', 'planning', 'nurture'] as const
-type MeetingType = typeof MEETING_TYPES[number]
-
-const TYPE_LABELS: Record<MeetingType, string> = {
-  intro:    'Intro Call',
-  planning: 'Planning Call',
-  nurture:  'Nurture Call',
+interface MeetingTypeConfig {
+  id: string
+  label: string
+  scoreable: boolean
+  sort_order: number
 }
 
-type ActiveTab = MeetingType | 'links'
-
 export default function TemplatesPage() {
-  const [activeTab, setActiveTab] = useState<ActiveTab>('intro')
+  const [meetingTypes, setMeetingTypes] = useState<MeetingTypeConfig[]>([])
+  const [activeTab, setActiveTab] = useState<string>('links')
   const [templates, setTemplates] = useState<Record<string, Template>>({})
   const [links, setLinks] = useState<ApprovedLink[]>([])
   const [loading, setLoading] = useState(true)
 
-  // Per-type save state
   const [saving, setSaving] = useState<Record<string, boolean>>({})
   const [saved, setSaved] = useState<Record<string, boolean>>({})
-
-  // Subject is plain text — controlled per type
   const [subjects, setSubjects] = useState<Record<string, string>>({})
 
-  // Editor refs — one note + one email body per meeting type
-  const introNoteRef    = useRef<HTMLDivElement>(null)
-  const introBodyRef    = useRef<HTMLDivElement>(null)
-  const planningNoteRef = useRef<HTMLDivElement>(null)
-  const planningBodyRef = useRef<HTMLDivElement>(null)
-  const nurtureNoteRef  = useRef<HTMLDivElement>(null)
-  const nurtureBodyRef  = useRef<HTMLDivElement>(null)
+  // Lazily-created stable refs per type — stored in a plain object inside useRef
+  // so they survive re-renders without violating hooks rules
+  const noteRefsMap = useRef<Record<string, React.RefObject<HTMLDivElement>>>({})
+  const bodyRefsMap = useRef<Record<string, React.RefObject<HTMLDivElement>>>({})
 
-  const editorRefs: Record<MeetingType, { note: React.RefObject<HTMLDivElement>; emailBody: React.RefObject<HTMLDivElement> }> = {
-    intro:    { note: introNoteRef,    emailBody: introBodyRef },
-    planning: { note: planningNoteRef, emailBody: planningBodyRef },
-    nurture:  { note: nurtureNoteRef,  emailBody: nurtureBodyRef },
+  function getRef(
+    map: React.MutableRefObject<Record<string, React.RefObject<HTMLDivElement>>>,
+    key: string
+  ): React.RefObject<HTMLDivElement> {
+    if (!map.current[key]) map.current[key] = React.createRef<HTMLDivElement>()
+    return map.current[key]
   }
 
-  // Link add state
+  // Link state
   const [newUrl, setNewUrl] = useState('')
   const [newLabel, setNewLabel] = useState('')
   const [addingLink, setAddingLink] = useState(false)
   const [linkError, setLinkError] = useState<string | null>(null)
 
   useEffect(() => {
-    fetch('/api/templates')
-      .then((r) => r.json())
-      .then(({ templates: rows, links: linkRows }) => {
-        const map: Record<string, Template> = {}
-        for (const t of rows) map[t.meeting_type] = t
-        for (const type of MEETING_TYPES) {
-          if (!map[type]) map[type] = { meeting_type: type, note_example: '', email_subject_example: '', email_body_example: '' }
-        }
-        setTemplates(map)
-        const subjectMap: Record<string, string> = {}
-        for (const type of MEETING_TYPES) {
-          subjectMap[type] = map[type].email_subject_example ?? ''
-        }
-        setSubjects(subjectMap)
-        setLinks(linkRows)
-      })
-      .finally(() => setLoading(false))
+    Promise.all([
+      fetch('/api/meeting-types').then((r) => r.json()),
+      fetch('/api/templates').then((r) => r.json()),
+    ]).then(([types, { templates: rows, links: linkRows }]) => {
+      const allTypes: MeetingTypeConfig[] = types
+      setMeetingTypes(allTypes)
+      if (allTypes.length > 0) setActiveTab(allTypes[0].id)
+
+      const map: Record<string, Template> = {}
+      for (const t of rows) map[t.meeting_type] = t
+      for (const type of allTypes) {
+        if (!map[type.id]) map[type.id] = { meeting_type: type.id, note_example: '', email_subject_example: '', email_body_example: '' }
+      }
+      setTemplates(map)
+
+      const subjectMap: Record<string, string> = {}
+      for (const type of allTypes) subjectMap[type.id] = map[type.id]?.email_subject_example ?? ''
+      setSubjects(subjectMap)
+      setLinks(linkRows)
+    }).finally(() => setLoading(false))
   }, [])
 
-  async function saveTemplate(type: MeetingType) {
-    setSaving((prev) => ({ ...prev, [type]: true }))
-    const refs = editorRefs[type]
-    const note_example = refs.note.current?.innerHTML ?? ''
-    const email_body_example = refs.emailBody.current?.innerHTML ?? ''
-    const email_subject_example = subjects[type] ?? ''
+  async function saveTemplate(typeId: string) {
+    setSaving((prev) => ({ ...prev, [typeId]: true }))
+    const noteHtml = getRef(noteRefsMap, typeId).current?.innerHTML ?? ''
+    const bodyHtml = getRef(bodyRefsMap, typeId).current?.innerHTML ?? ''
+    const email_subject_example = subjects[typeId] ?? ''
 
-    await fetch(`/api/templates/${type}`, {
+    await fetch(`/api/templates/${typeId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ note_example, email_subject_example, email_body_example }),
+      body: JSON.stringify({ note_example: noteHtml, email_subject_example, email_body_example: bodyHtml }),
     })
 
     setTemplates((prev) => ({
       ...prev,
-      [type]: { ...prev[type], note_example, email_subject_example, email_body_example },
+      [typeId]: { ...prev[typeId], note_example: noteHtml, email_subject_example, email_body_example: bodyHtml },
     }))
-
-    setSaving((prev) => ({ ...prev, [type]: false }))
-    setSaved((prev) => ({ ...prev, [type]: true }))
-    setTimeout(() => setSaved((prev) => ({ ...prev, [type]: false })), 2000)
+    setSaving((prev) => ({ ...prev, [typeId]: false }))
+    setSaved((prev) => ({ ...prev, [typeId]: true }))
+    setTimeout(() => setSaved((prev) => ({ ...prev, [typeId]: false })), 2000)
   }
 
   async function addLink() {
     if (!newUrl.trim() || !newLabel.trim()) return
-    setAddingLink(true)
-    setLinkError(null)
+    setAddingLink(true); setLinkError(null)
     try {
       const res = await fetch('/api/templates/links', {
         method: 'POST',
@@ -105,8 +98,7 @@ export default function TemplatesPage() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
       setLinks((prev) => [...prev, data])
-      setNewUrl('')
-      setNewLabel('')
+      setNewUrl(''); setNewLabel('')
     } catch (err: unknown) {
       setLinkError(err instanceof Error ? err.message : 'Failed to add link')
     } finally {
@@ -119,13 +111,11 @@ export default function TemplatesPage() {
     setLinks((prev) => prev.filter((l) => l.id !== id))
   }
 
-  if (loading) {
-    return (
-      <div className="flex h-screen items-center justify-center bg-gray-50">
-        <p className="text-sm text-gray-400">Loading…</p>
-      </div>
-    )
-  }
+  if (loading) return (
+    <div className="flex h-screen items-center justify-center bg-gray-50">
+      <p className="text-sm text-gray-400">Loading…</p>
+    </div>
+  )
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -168,13 +158,13 @@ export default function TemplatesPage() {
           {/* Tabs */}
           <div className="border-b border-gray-200 mb-6">
             <nav className="flex gap-6">
-              {MEETING_TYPES.map((type) => (
-                <button key={type} onClick={() => setActiveTab(type)}
+              {meetingTypes.map((type) => (
+                <button key={type.id} onClick={() => setActiveTab(type.id)}
                   className={`pb-3 text-sm font-medium border-b-2 transition-colors ${
-                    activeTab === type ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'
+                    activeTab === type.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'
                   }`}
                 >
-                  {TYPE_LABELS[type]}
+                  {type.label}
                 </button>
               ))}
               <button onClick={() => setActiveTab('links')}
@@ -187,65 +177,67 @@ export default function TemplatesPage() {
             </nav>
           </div>
 
-          {/* Meeting type template editor */}
-          {activeTab !== 'links' && (() => {
-            const type = activeTab as MeetingType
-            const t = templates[type] ?? {}
-            const refs = editorRefs[type]
+          {/* Render ALL type editors simultaneously, show/hide with CSS to preserve DOM state */}
+          {meetingTypes.map((type) => {
+            const t = templates[type.id] ?? {}
+            const noteRef = getRef(noteRefsMap, type.id)
+            const bodyRef = getRef(bodyRefsMap, type.id)
             return (
-              <div className="max-w-3xl space-y-6 pb-12">
-                {/* HubSpot Note */}
-                <section className="bg-white rounded-xl border border-gray-200 p-6">
-                  <h3 className="text-sm font-semibold text-gray-900 mb-1">HubSpot Note Example</h3>
-                  <p className="text-xs text-gray-500 mb-3">
-                    Paste an example of a good HubSpot note for a {TYPE_LABELS[type].toLowerCase()}. Gemini will match this tone and format.
-                  </p>
-                  <RichEditor
-                    initialHtml={t.note_example ?? ''}
-                    editorRef={refs.note}
-                    minHeight="min-h-[160px]"
-                    placeholder={`Example HubSpot note for a ${TYPE_LABELS[type].toLowerCase()}…`}
-                  />
-                </section>
+              <div key={type.id} className={activeTab === type.id ? '' : 'hidden'}>
+                <div className="max-w-3xl space-y-6 pb-12">
+                  {/* HubSpot Note */}
+                  <section className="bg-white rounded-xl border border-gray-200 p-6">
+                    <h3 className="text-sm font-semibold text-gray-900 mb-1">HubSpot Note Example</h3>
+                    <p className="text-xs text-gray-500 mb-3">
+                      Paste an example of a good HubSpot note for a {type.label.toLowerCase()}. Gemini will match this tone and format.
+                    </p>
+                    <RichEditor
+                      initialHtml={t.note_example ?? ''}
+                      editorRef={noteRef}
+                      minHeight="min-h-[160px]"
+                      placeholder={`Example HubSpot note for a ${type.label.toLowerCase()}…`}
+                    />
+                  </section>
 
-                {/* Follow-up Email */}
-                <section className="bg-white rounded-xl border border-gray-200 p-6">
-                  <h3 className="text-sm font-semibold text-gray-900 mb-1">Follow-up Email Example</h3>
-                  <p className="text-xs text-gray-500 mb-3">
-                    Paste an example follow-up email for a {TYPE_LABELS[type].toLowerCase()}. Gemini will match this tone and format.
-                  </p>
-                  <div className="space-y-3">
-                    <div>
-                      <label className="block text-xs font-medium text-gray-500 mb-1">Subject</label>
-                      <input type="text"
-                        value={subjects[type] ?? ''}
-                        onChange={(e) => setSubjects((prev) => ({ ...prev, [type]: e.target.value }))}
-                        placeholder="Example subject line…"
-                        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      />
+                  {/* Follow-up Email */}
+                  <section className="bg-white rounded-xl border border-gray-200 p-6">
+                    <h3 className="text-sm font-semibold text-gray-900 mb-1">Follow-up Email Example</h3>
+                    <p className="text-xs text-gray-500 mb-3">
+                      Paste an example follow-up email for a {type.label.toLowerCase()}. Gemini will match this tone and format.
+                    </p>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Subject</label>
+                        <input type="text"
+                          value={subjects[type.id] ?? ''}
+                          onChange={(e) => setSubjects((prev) => ({ ...prev, [type.id]: e.target.value }))}
+                          placeholder="Example subject line…"
+                          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Body</label>
+                        <RichEditor
+                          initialHtml={t.email_body_example ?? ''}
+                          editorRef={bodyRef}
+                          minHeight="min-h-[220px]"
+                          placeholder="Example email body…"
+                        />
+                      </div>
                     </div>
-                    <div>
-                      <label className="block text-xs font-medium text-gray-500 mb-1">Body</label>
-                      <RichEditor
-                        initialHtml={t.email_body_example ?? ''}
-                        editorRef={refs.emailBody}
-                        minHeight="min-h-[220px]"
-                        placeholder="Example email body…"
-                      />
-                    </div>
+                  </section>
+
+                  <div className="flex justify-end">
+                    <button onClick={() => saveTemplate(type.id)} disabled={saving[type.id]}
+                      className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                    >
+                      {saving[type.id] ? 'Saving…' : saved[type.id] ? '✓ Saved' : 'Save'}
+                    </button>
                   </div>
-                </section>
-
-                <div className="flex justify-end">
-                  <button onClick={() => saveTemplate(type)} disabled={saving[type]}
-                    className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
-                  >
-                    {saving[type] ? 'Saving…' : saved[type] ? '✓ Saved' : 'Save'}
-                  </button>
                 </div>
               </div>
             )
-          })()}
+          })}
 
           {/* Approved links */}
           {activeTab === 'links' && (

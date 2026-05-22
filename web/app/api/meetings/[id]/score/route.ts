@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { getMeetingById, getScorecard, getMeetingScore, saveMeetingScore } from '@/lib/db'
+import { getMeetingById, getScorecard, getMeetingScore, saveMeetingScore, getMeetingTypes } from '@/lib/db'
 import type { ScorecardSection, SectionScore } from '@/lib/db'
 import { callGemini } from '@/lib/gemini'
 
@@ -110,8 +110,10 @@ export async function POST(
   }
 
   const meetingType = meeting.meeting_type ?? ''
-  if (!['intro', 'planning'].includes(meetingType)) {
-    return NextResponse.json({ error: 'Scoring is only available for intro and planning meetings' }, { status: 400 })
+  const allTypes = await getMeetingTypes()
+  const typeConfig = allTypes.find((t) => t.id === meetingType)
+  if (!typeConfig?.scoreable) {
+    return NextResponse.json({ error: 'Scoring is not enabled for this meeting type' }, { status: 400 })
   }
 
   const scorecard = await getScorecard(meetingType)

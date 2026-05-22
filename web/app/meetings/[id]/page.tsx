@@ -10,8 +10,7 @@ import AskPanel from '@/components/AskPanel'
 import CoachingPanel from '@/components/CoachingPanel'
 import type { MeetingDetail } from '@/lib/db'
 
-const MEETING_TYPES = ['intro', 'planning', 'nurture']
-const SCOREABLE_TYPES = ['intro', 'planning']
+interface MeetingTypeConfig { id: string; label: string; scoreable: boolean }
 
 function formatDate(iso: string | null): string {
   if (!iso) return 'Unknown date'
@@ -29,6 +28,7 @@ export default function MeetingPage() {
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<Tab>('analysis')
   const [isLeadershipUser, setIsLeadershipUser] = useState(false)
+  const [meetingTypes, setMeetingTypes] = useState<MeetingTypeConfig[]>([])
   const [typeEdit, setTypeEdit] = useState(false)
   const [savingType, setSavingType] = useState(false)
   const [selectedType, setSelectedType] = useState('')
@@ -38,6 +38,10 @@ export default function MeetingPage() {
     fetch('/api/me')
       .then((r) => r.ok ? r.json() : null)
       .then((data) => { if (data?.isLeadership) setIsLeadershipUser(true) })
+      .catch(() => {})
+    fetch('/api/meeting-types')
+      .then((r) => r.json())
+      .then((data) => setMeetingTypes(data))
       .catch(() => {})
   }, [])
 
@@ -50,7 +54,7 @@ export default function MeetingPage() {
       .then((data) => {
         if (!data) return
         setMeeting(data)
-        setSelectedType(data.meeting_type ?? 'nurture')
+        setSelectedType(data.meeting_type ?? '')
       })
       .finally(() => setLoading(false))
   }, [id, router])
@@ -80,7 +84,7 @@ export default function MeetingPage() {
 
   if (!meeting) return null
 
-  const isScoreable = SCOREABLE_TYPES.includes(meeting.meeting_type ?? '')
+  const isScoreable = meetingTypes.find((t) => t.id === meeting.meeting_type)?.scoreable ?? false
 
   const tabs: { key: Tab; label: string }[] = [
     { key: 'analysis', label: 'AI Analysis' },
@@ -150,8 +154,8 @@ export default function MeetingPage() {
                     onChange={(e) => setSelectedType(e.target.value)}
                     className="rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
-                    {MEETING_TYPES.map((t) => (
-                      <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>
+                    {meetingTypes.map((t) => (
+                      <option key={t.id} value={t.id}>{t.label}</option>
                     ))}
                   </select>
                   <button

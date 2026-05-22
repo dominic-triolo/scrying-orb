@@ -31,11 +31,16 @@ export default function Sidebar({
   const pathname = usePathname()
   const isHome = pathname === '/'
   const [isLeadershipUser, setIsLeadershipUser] = useState(false)
+  const [meetingTypes, setMeetingTypes] = useState<{ id: string; label: string }[]>([])
 
   useEffect(() => {
     fetch('/api/me')
       .then((r) => r.ok ? r.json() : null)
       .then((data) => { if (data?.isLeadership) setIsLeadershipUser(true) })
+      .catch(() => {})
+    fetch('/api/meeting-types')
+      .then((r) => r.json())
+      .then((data) => setMeetingTypes(data))
       .catch(() => {})
   }, [])
 
@@ -72,17 +77,31 @@ export default function Sidebar({
           Templates
         </Link>
         {isLeadershipUser && (
-          <Link
-            href="/scorecard-setup"
-            className={`flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-              pathname === '/scorecard-setup' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
-            }`}
-          >
-            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
-            </svg>
-            Scorecard Setup
-          </Link>
+          <div className="pt-3">
+            <p className="px-3 text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Settings</p>
+            <Link
+              href="/settings/meeting-types"
+              className={`flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                pathname === '/settings/meeting-types' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+              }`}
+            >
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+              </svg>
+              Meeting Types
+            </Link>
+            <Link
+              href="/scorecard-setup"
+              className={`flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                pathname === '/scorecard-setup' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+              }`}
+            >
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+              </svg>
+              Scorecard Setup
+            </Link>
+          </div>
         )}
       </nav>
 
@@ -112,9 +131,9 @@ export default function Sidebar({
               className="w-full rounded-md bg-slate-800 border border-slate-700 px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
             >
               <option value="">All types</option>
-              <option value="intro">Intro</option>
-              <option value="planning">Planning</option>
-              <option value="nurture">Nurture</option>
+              {meetingTypes.map((t) => (
+                <option key={t.id} value={t.id}>{t.label}</option>
+              ))}
             </select>
           </div>
 

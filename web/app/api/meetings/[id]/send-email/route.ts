@@ -55,9 +55,14 @@ export async function POST(req: NextRequest) {
   )
 
   if (!gmailRes.ok) {
-    const err = await gmailRes.text()
-    console.error('Gmail send failed:', err)
-    return NextResponse.json({ error: 'Failed to send email' }, { status: 502 })
+    const errText = await gmailRes.text()
+    console.error('Gmail send failed:', gmailRes.status, errText)
+    let gmailMessage = `Gmail error ${gmailRes.status}`
+    try {
+      const parsed = JSON.parse(errText)
+      gmailMessage = parsed?.error?.message ?? gmailMessage
+    } catch { /* use status fallback */ }
+    return NextResponse.json({ error: gmailMessage }, { status: 502 })
   }
 
   return NextResponse.json({ success: true })

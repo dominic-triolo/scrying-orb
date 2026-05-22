@@ -4,12 +4,11 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 
-const SCOREABLE_TYPES = ['intro', 'planning'] as const
-type ScoreableType = typeof SCOREABLE_TYPES[number]
-
-const TYPE_LABELS: Record<ScoreableType, string> = {
-  intro:    'Intro Call',
-  planning: 'Planning Call',
+interface MeetingTypeConfig {
+  id: string
+  label: string
+  scoreable: boolean
+  sort_order: number
 }
 
 interface SectionState {
@@ -43,43 +42,49 @@ function emptySection(): SectionState {
 
 export default function ScorecardSetupPage() {
   const router = useRouter()
-  const [activeTab, setActiveTab] = useState<ScoreableType>('intro')
-  const [state, setState] = useState<Record<ScoreableType, ScorecardState>>({
-    intro: defaultState(),
-    planning: defaultState(),
-  })
+  const [scoreableTypes, setScoreableTypes] = useState<MeetingTypeConfig[]>([])
+  const [activeTab, setActiveTab] = useState<string>('')
+  const [state, setState] = useState<Record<string, ScorecardState>>({})
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    // Gate: check leadership
     fetch('/api/me')
       .then((r) => r.json())
-      .then((data) => {
+      .then(async (data) => {
         if (!data.isLeadership) { router.replace('/'); return }
-        return fetch('/api/scorecard').then((r) => r.json())
-      })
-      .then((scorecards: unknown) => {
-        if (!Array.isArray(scorecards)) return
-        const next = { intro: defaultState(), planning: defaultState() }
-        for (const sc of scorecards) {
-          const type = sc.meeting_type as ScoreableType
-          if (!SCOREABLE_TYPES.includes(type)) continue
-          next[type] = {
-            min_score: String(sc.min_score ?? 1),
-            mid_score: String(sc.mid_score ?? 3),
-            max_score: String(sc.max_score ?? 5),
-            formatting_prompt: sc.formatting_prompt ?? '',
-            sections: (sc.sections ?? []).map((s: Record<string, unknown>) => ({
-              id: String(s.id),
-              title: String(s.title ?? ''),
-              description_min: String(s.description_min ?? ''),
-              description_mid: String(s.description_mid ?? ''),
-              description_max: String(s.description_max ?? ''),
-              weight: s.weight != null ? String(s.weight) : '',
-            })),
+
+        const [typesRes, scorecardsRes] = await Promise.all([
+          fetch('/api/meeting-types').then((r) => r.json()),
+          fetch('/api/scorecard').then((r) => r.json()),
+        ])
+
+        const scoreable: MeetingTypeConfig[] = (typesRes as MeetingTypeConfig[]).filter((t) => t.scoreable)
+        setScoreableTypes(scoreable)
+        if (scoreable.length > 0) setActiveTab(scoreable[0].id)
+
+        const next: Record<string, ScorecardState> = {}
+        for (const t of scoreable) next[t.id] = defaultState()
+
+        if (Array.isArray(scorecardsRes)) {
+          for (const sc of scorecardsRes) {
+            if (!next[sc.meeting_type]) continue
+            next[sc.meeting_type] = {
+              min_score: String(sc.min_score ?? 1),
+              mid_score: String(sc.mid_score ?? 3),
+              max_score: String(sc.max_score ?? 5),
+              formatting_prompt: sc.formatting_prompt ?? '',
+              sections: (sc.sections ?? []).map((s: Record<string, unknown>) => ({
+                id: String(s.id),
+                title: String(s.title ?? ''),
+                description_min: String(s.description_min ?? ''),
+                description_mid: String(s.description_mid ?? ''),
+                description_max: String(s.description_max ?? ''),
+                weight: s.weight != null ? String(s.weight) : '',
+              })),
+            }
           }
         }
         setState(next)
@@ -88,10 +93,7 @@ export default function ScorecardSetupPage() {
   }, [router])
 
   function updateField(field: keyof Omit<ScorecardState, 'sections'>, value: string) {
-    setState((prev) => ({
-      ...prev,
-      [activeTab]: { ...prev[activeTab], [field]: value },
-    }))
+    setState((prev) => ({ ...prev, [activeTab]: { ...prev[activeTab], [field]: value } }))
     setSaved(false)
   }
 
@@ -107,10 +109,7 @@ export default function ScorecardSetupPage() {
   function addSection() {
     setState((prev) => ({
       ...prev,
-      [activeTab]: {
-        ...prev[activeTab],
-        sections: [...prev[activeTab].sections, emptySection()],
-      },
+      [activeTab]: { ...prev[activeTab], sections: [...prev[activeTab].sections, emptySection()] },
     }))
   }
 
@@ -160,8 +159,8 @@ export default function ScorecardSetupPage() {
       })
       const text = await res.text()
       let data: Record<string, unknown> = {}
-      try { data = JSON.parse(text) } catch { /* non-JSON response */ }
-      if (!res.ok) throw new Error((data.error as string) ?? `Server error ${res.status} — check that migration 004_scoring.sql has been run`)
+      try { data = JSON.parse(text) } catch { /* non-JSON */ }
+      if (!res.ok) throw new Error((data.error as string) ?? `Server error ${res.status}`)
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch (err: unknown) {
@@ -171,15 +170,25 @@ export default function ScorecardSetupPage() {
     }
   }
 
-  if (loading) {
-    return (
-      <div className="flex h-screen items-center justify-center bg-gray-50">
-        <p className="text-sm text-gray-400">Loading…</p>
-      </div>
-    )
-  }
+  if (loading) return (
+    <div className="flex h-screen items-center justify-center bg-gray-50">
+      <p className="text-sm text-gray-400">Loading…</p>
+    </div>
+  )
 
-  const sc = state[activeTab]
+  if (scoreableTypes.length === 0) return (
+    <div className="flex h-screen items-center justify-center bg-gray-50">
+      <div className="text-center">
+        <p className="text-sm text-gray-600 mb-2">No scoreable meeting types configured.</p>
+        <Link href="/settings/meeting-types" className="text-sm text-blue-600 hover:underline">
+          Go to Meeting Type Setup →
+        </Link>
+      </div>
+    </div>
+  )
+
+  const sc = state[activeTab] ?? defaultState()
+  const activeTypeLabel = scoreableTypes.find((t) => t.id === activeTab)?.label ?? activeTab
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -206,14 +215,25 @@ export default function ScorecardSetupPage() {
             </svg>
             Templates
           </Link>
-          <Link href="/scorecard-setup"
-            className="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium bg-slate-800 text-white transition-colors"
-          >
-            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
-            </svg>
-            Scorecard Setup
-          </Link>
+          <div className="pt-3">
+            <p className="px-3 text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Settings</p>
+            <Link href="/settings/meeting-types"
+              className="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-slate-400 hover:bg-slate-800 hover:text-white transition-colors"
+            >
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+              </svg>
+              Meeting Types
+            </Link>
+            <Link href="/scorecard-setup"
+              className="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium bg-slate-800 text-white transition-colors"
+            >
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+              </svg>
+              Scorecard Setup
+            </Link>
+          </div>
         </nav>
       </aside>
 
@@ -230,13 +250,13 @@ export default function ScorecardSetupPage() {
           {/* Tabs */}
           <div className="border-b border-gray-200 mb-6">
             <nav className="flex gap-6">
-              {SCOREABLE_TYPES.map((type) => (
-                <button key={type} onClick={() => setActiveTab(type)}
+              {scoreableTypes.map((type) => (
+                <button key={type.id} onClick={() => setActiveTab(type.id)}
                   className={`pb-3 text-sm font-medium border-b-2 transition-colors ${
-                    activeTab === type ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'
+                    activeTab === type.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'
                   }`}
                 >
-                  {TYPE_LABELS[type]}
+                  {type.label}
                 </button>
               ))}
             </nav>
@@ -256,10 +276,7 @@ export default function ScorecardSetupPage() {
                     <label className="block text-xs font-medium text-gray-500 mb-1">
                       {field === 'min_score' ? 'Minimum' : field === 'mid_score' ? 'Midpoint' : 'Maximum'}
                     </label>
-                    <input
-                      type="number"
-                      step="0.5"
-                      value={sc[field]}
+                    <input type="number" step="0.5" value={sc[field]}
                       onChange={(e) => updateField(field, e.target.value)}
                       className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
@@ -272,13 +289,12 @@ export default function ScorecardSetupPage() {
             <section className="bg-white rounded-xl border border-gray-200 p-6">
               <h3 className="text-sm font-semibold text-gray-900 mb-1">Coaching Output Format</h3>
               <p className="text-xs text-gray-500 mb-3">
-                Describe how the written coaching feedback should be structured. Gemini will follow these instructions when writing the coaching output.
+                Describe how the written coaching feedback should be structured.
               </p>
-              <textarea
-                value={sc.formatting_prompt}
+              <textarea value={sc.formatting_prompt}
                 onChange={(e) => updateField('formatting_prompt', e.target.value)}
                 rows={4}
-                placeholder="e.g. Start with a 1-sentence summary of overall performance. Then provide a paragraph of specific strengths, followed by a paragraph of areas for improvement. End with 2-3 actionable coaching points."
+                placeholder="e.g. Start with a 1-sentence summary of overall performance…"
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
               />
             </section>
@@ -290,7 +306,7 @@ export default function ScorecardSetupPage() {
                 <span className="text-xs text-gray-400">{sc.sections.length} section{sc.sections.length !== 1 ? 's' : ''}</span>
               </div>
               <p className="text-xs text-gray-500 mb-4">
-                Each section is scored independently. Descriptions tell Gemini what each score level looks like. Weight controls how much each section contributes to the overall score (leave blank for equal weight).
+                Each section is scored independently. Weight controls contribution to the overall score (leave blank for equal weight).
               </p>
 
               {sc.sections.length === 0 && (
@@ -300,14 +316,11 @@ export default function ScorecardSetupPage() {
               <div className="space-y-5">
                 {sc.sections.map((section, i) => (
                   <div key={i} className="rounded-lg border border-gray-200 p-5 bg-gray-50">
-                    {/* Section header */}
                     <div className="flex items-start gap-3 mb-4">
                       <div className="flex-1 grid grid-cols-[1fr_auto] gap-3">
                         <div>
                           <label className="block text-xs font-medium text-gray-500 mb-1">Section Title</label>
-                          <input
-                            type="text"
-                            value={section.title}
+                          <input type="text" value={section.title}
                             onChange={(e) => updateSection(i, 'title', e.target.value)}
                             placeholder="e.g. Objection Handling"
                             className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -315,21 +328,16 @@ export default function ScorecardSetupPage() {
                         </div>
                         <div className="w-24">
                           <label className="block text-xs font-medium text-gray-500 mb-1">Weight</label>
-                          <input
-                            type="number"
-                            step="0.5"
-                            min="0"
-                            value={section.weight}
+                          <input type="number" step="0.5" min="0" value={section.weight}
                             onChange={(e) => updateSection(i, 'weight', e.target.value)}
                             placeholder="Auto"
                             className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
                           />
                         </div>
                       </div>
-                      {/* Controls */}
                       <div className="flex flex-col gap-1 mt-5">
                         <button onClick={() => moveSection(i, -1)} disabled={i === 0}
-                          className="p-1 rounded text-gray-400 hover:text-gray-600 disabled:opacity-30 transition-colors"
+                          className="p-1 rounded text-gray-400 hover:text-gray-600 disabled:opacity-30"
                           title="Move up"
                         >
                           <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -337,7 +345,7 @@ export default function ScorecardSetupPage() {
                           </svg>
                         </button>
                         <button onClick={() => moveSection(i, 1)} disabled={i === sc.sections.length - 1}
-                          className="p-1 rounded text-gray-400 hover:text-gray-600 disabled:opacity-30 transition-colors"
+                          className="p-1 rounded text-gray-400 hover:text-gray-600 disabled:opacity-30"
                           title="Move down"
                         >
                           <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -345,7 +353,7 @@ export default function ScorecardSetupPage() {
                           </svg>
                         </button>
                         <button onClick={() => removeSection(i)}
-                          className="p-1 rounded text-red-400 hover:text-red-600 transition-colors"
+                          className="p-1 rounded text-red-400 hover:text-red-600"
                           title="Remove section"
                         >
                           <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -354,8 +362,6 @@ export default function ScorecardSetupPage() {
                         </button>
                       </div>
                     </div>
-
-                    {/* Score descriptions */}
                     <div className="space-y-3">
                       {(['description_min', 'description_mid', 'description_max'] as const).map((field) => {
                         const scoreVal = field === 'description_min' ? sc.min_score : field === 'description_mid' ? sc.mid_score : sc.max_score
@@ -365,11 +371,10 @@ export default function ScorecardSetupPage() {
                             <label className="block text-xs font-medium text-gray-500 mb-1">
                               Score {scoreVal} — {label}
                             </label>
-                            <textarea
-                              value={section[field]}
+                            <textarea value={section[field]}
                               onChange={(e) => updateSection(i, field, e.target.value)}
                               rows={3}
-                              placeholder={`Describe what a ${label.toLowerCase()} score looks like for ${section.title || 'this section'}…`}
+                              placeholder={`Describe what a ${label.toLowerCase()} score looks like…`}
                               className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y"
                             />
                           </div>
@@ -396,7 +401,7 @@ export default function ScorecardSetupPage() {
               <button onClick={save} disabled={saving}
                 className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
               >
-                {saving ? 'Saving…' : saved ? '✓ Saved' : `Save ${TYPE_LABELS[activeTab]} Scorecard`}
+                {saving ? 'Saving…' : saved ? '✓ Saved' : `Save ${activeTypeLabel} Scorecard`}
               </button>
             </div>
 

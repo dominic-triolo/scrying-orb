@@ -1,9 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions, isLeadership } from '@/lib/auth'
-import { getMeetingById, updateMeetingType } from '@/lib/db'
-
-const VALID_TYPES = ['intro', 'planning', 'nurture']
+import { getMeetingById, updateMeetingType, getMeetingTypes } from '@/lib/db'
 
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
   const session = await getServerSession(authOptions)
@@ -12,8 +10,12 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   }
 
   const { type } = await req.json()
-  if (!VALID_TYPES.includes(type)) {
-    return NextResponse.json({ error: `Invalid type. Must be one of: ${VALID_TYPES.join(', ')}` }, { status: 400 })
+
+  // Validate against DB-driven list
+  const validTypes = await getMeetingTypes()
+  const validIds = validTypes.map((t) => t.id)
+  if (!validIds.includes(type)) {
+    return NextResponse.json({ error: `Invalid type. Must be one of: ${validIds.join(', ')}` }, { status: 400 })
   }
 
   const meeting = await getMeetingById(params.id)
@@ -28,6 +30,5 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 
   await updateMeetingType(params.id, type)
 
-  // Return the updated meeting type so the UI can reflect it immediately
   return NextResponse.json({ id: params.id, meeting_type: type, meeting_type_source: 'manual' })
 }

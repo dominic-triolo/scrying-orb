@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { getScorecard, upsertScorecard } from '@/lib/db'
+import { getScorecard, upsertScorecard, getMeetingTypes } from '@/lib/db'
 
 function isLeadership(email: string): boolean {
   const emails = (process.env.LEADERSHIP_EMAILS ?? '')
@@ -41,8 +41,10 @@ export async function PUT(
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
-  if (!['intro', 'planning'].includes(params.type)) {
-    return NextResponse.json({ error: 'Scorecards only supported for intro and planning meetings' }, { status: 400 })
+  const allTypes = await getMeetingTypes()
+  const typeConfig = allTypes.find((t) => t.id === params.type)
+  if (!typeConfig?.scoreable) {
+    return NextResponse.json({ error: 'Scorecards are only supported for scoreable meeting types' }, { status: 400 })
   }
 
   let body: Record<string, unknown>
