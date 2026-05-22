@@ -1,4 +1,6 @@
 import logging
+import re
+from datetime import datetime, timezone
 
 import requests
 
@@ -145,3 +147,106 @@ class HubSpotClient:
 
         logger.info(f"Found {len(deals)} deal(s) for contact {contact_id}")
         return deals
+
+    def find_meeting_type(
+        self,
+        contact_id: str,
+        meeting_name: str,
+        meeting_date: datetime,
+    ) -> str | None:
+        """
+        Look up hs_activity_type for the meeting logged in HubSpot matching this
+        contact, title, and date (day-level precision).
+
+        Returns the hs_activity_type string (e.g. "Intro Call") or None if no
+        unambiguous match with a type assigned is found.
+        """
+        if not self._enabled:
+            return None
+
+        # 1. Get meeting IDs associated with this contact
+        try:
+            assoc_resp = requests.get(
+                f"{HUBSPOT_BASE}/crm/v4/objects/contacts/{contact_id}/associations/meetings",
+                headers=self._headers(),
+                params={"limit": 100},
+                timeout=10,
+            )
+        except requests.RequestException as exc:
+            logger.warning(f"HubSpot association fetch failed for contact {contact_id}: {exc}")
+            return None
+
+        if not assoc_resp.ok:
+            logger.warning(f"HubSpot associations returned {assoc_resp.status_code} for contact {contact_id}")
+            return None
+
+        meeting_ids = [str(r["toObjectId"]) for r in assoc_resp.json().get("results", [])]
+        if not meeting_ids:
+            return None
+
+        # 2. Batch fetch meeting properties
+        try:
+            batch_resp = requests.post(
+                f"{HUBSPOT_BASE}/crm/v3/objects/meetings/batch/read",
+                headers=self._headers(),
+                json={
+                    "inputs": [{"id": mid} for mid in meeting_ids[:100]],
+                    "properties": ["hs_meeting_title", "hs_timestamp", "hs_activity_type"],
+                },
+                timeout=10,
+            )
+        except requests.RequestException as exc:
+            logger.warning(f"HubSpot batch meeting fetch failed: {exc}")
+            return None
+
+        if not batch_resp.ok:
+            logger.warning(f"HubSpot batch read returned {batch_resp.status_code}")
+            return None
+
+        meetings = batch_resp.json().get("results", [])
+        target_title = _normalize_title(meeting_name)
+        target_date = meeting_date.date() if hasattr(meeting_date, "date") else meeting_date
+
+        matches = []
+        for m in meetings:
+            props = m.get("properties", {})
+            activity_type = props.get("hs_activity_type") or ""
+            if not activity_type.strip():
+                continue  # skip untyped meetings (duplicates / manually logged)
+
+            hs_title = _normalize_title(props.get("hs_meeting_title") or "")
+            if not hs_title:
+                continue
+
+            # Title match: either is a substring of the other
+            if target_title not in hs_title and hs_title not in target_title:
+                continue
+
+            # Date match: truncate HubSpot timestamp (epoch ms string) to day
+            hs_ts = props.get("hs_timestamp") or ""
+            if hs_ts:
+                try:
+                    hs_date = datetime.fromtimestamp(int(hs_ts) / 1000, tz=timezone.utc).date()
+                    if hs_date != target_date:
+                        continue
+                except (ValueError, TypeError):
+                    pass  # if we can't parse the date, still consider it a title match
+
+            matches.append(activity_type.strip())
+
+        if len(matches) == 1:
+            logger.info(f"HubSpot meeting type for '{meeting_name}': {matches[0]}")
+            return matches[0]
+        if len(matches) > 1:
+            logger.warning(f"Ambiguous HubSpot meeting type matches for '{meeting_name}': {matches} — falling back")
+            return None
+
+        return None
+
+
+def _normalize_title(title: str) -> str:
+    """Lowercase, collapse whitespace, strip punctuation for fuzzy title matching."""
+    title = title.lower().strip()
+    title = re.sub(r"[^\w\s]", "", title)   # strip punctuation
+    title = re.sub(r"\s+", " ", title)       # collapse whitespace
+    return title

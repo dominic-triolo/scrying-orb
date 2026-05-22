@@ -17,6 +17,7 @@ from drive import DriveClient
 from gemini import GeminiClient
 from hubspot import HubSpotClient
 from sheet import SheetClient
+from datetime import datetime
 from utils import compute_talk_ratio, detect_meeting_type
 
 logging.basicConfig(
@@ -38,20 +39,8 @@ def process_row(
     logger.info(f"Processing: {pairing_key}")
 
     try:
-        # 1. Detect meeting type from calendar event title
-        meeting_type, meeting_type_source = detect_meeting_type(row["meeting_name"])
-        logger.info(f"Meeting type: {meeting_type} ({meeting_type_source})")
-
-        # 2. Read transcript from Shared Meetings Drive folder
-        transcript = drive.read_transcript(row["transcript_copy_id"])
-
-        # 3. Compute talk ratio (pure string parsing — no API call)
-        talk_ratio = compute_talk_ratio(transcript, row.get("recording_owner", ""))
-
-        # 4. Run Gemini synthesis
-        synthesis = gemini.synthesize(transcript, meeting_type)
-
-        # 5. Resolve external participant emails in HubSpot
+        # 1. Resolve external participant emails in HubSpot (moved early so we can
+        #    use contact IDs for meeting type lookup before synthesis)
         emails = [
             e.strip()
             for e in row.get("external_attendees", "").split(",")
@@ -64,6 +53,38 @@ def process_row(
             (c["hubspot_deal_id"] for c in contacts if c.get("hubspot_deal_id")),
             None,
         )
+
+        # 2. Determine meeting type: try HubSpot first, fall back to keyword detection
+        meeting_type, meeting_type_source = detect_meeting_type(row["meeting_name"])
+
+        raw_dt = row.get("meeting_datetime", "")
+        if raw_dt:
+            try:
+                meeting_date = datetime.fromisoformat(raw_dt.replace("Z", "+00:00"))
+                for contact in contacts:
+                    cid = contact.get("hubspot_contact_id")
+                    if not cid:
+                        continue
+                    hs_type_label = hubspot.find_meeting_type(cid, row["meeting_name"], meeting_date)
+                    if hs_type_label:
+                        type_id = db.get_meeting_type_id_by_label(hs_type_label)
+                        if type_id:
+                            meeting_type = type_id
+                            meeting_type_source = "hubspot"
+                            break
+            except (ValueError, AttributeError) as exc:
+                logger.warning(f"HubSpot meeting type lookup skipped: {exc}")
+
+        logger.info(f"Meeting type: {meeting_type} ({meeting_type_source})")
+
+        # 3. Read transcript from Shared Meetings Drive folder
+        transcript = drive.read_transcript(row["transcript_copy_id"])
+
+        # 4. Compute talk ratio (pure string parsing — no API call)
+        talk_ratio = compute_talk_ratio(transcript, row.get("recording_owner", ""))
+
+        # 5. Run Gemini synthesis
+        synthesis = gemini.synthesize(transcript, meeting_type)
 
         # 6. Write to Postgres
         meeting_id = db.upsert_meeting(

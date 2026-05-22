@@ -152,6 +152,20 @@ class DBClient:
                 conn.commit()
         logger.info(f"Re-synthesis complete for meeting {meeting_id}")
 
+    def get_meeting_type_id_by_label(self, label: str) -> str | None:
+        """
+        Look up a meeting type ID by its label (case-insensitive).
+        Used to convert hs_activity_type strings (e.g. "Intro Call") to
+        internal IDs (e.g. "intro").
+        Returns None if no matching type is configured.
+        """
+        sql = "SELECT id FROM meeting_types WHERE LOWER(label) = LOWER(%s) LIMIT 1"
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (label,))
+                row = cur.fetchone()
+                return str(row[0]) if row else None
+
     def upsert_contacts(self, meeting_id: str, contacts: list[dict]) -> None:
         """
         Insert or update meeting_contacts rows for all resolved external participants.
