@@ -53,10 +53,16 @@ export async function POST(
     ? (synthesis.action_items as string[]).join('\n- ')
     : ''
 
-  // Build template guidance
+  // Build template guidance + closing instruction
   let templateSection = ''
+  let closingInstruction = ''
+
   if (template?.note_example) {
-    templateSection = `\n\nEXAMPLE NOTE TO MATCH (tone, style, and format — do not copy verbatim):\n${stripHtml(template.note_example)}`
+    const exampleText = stripHtml(template.note_example)
+    templateSection = `\n\nEXAMPLE NOTE (follow this structure, format, and length exactly — do not copy verbatim, but match the style, organization, and level of detail):\n${exampleText}`
+    closingInstruction = `Follow the structure, format, and length of the example note above exactly. Match its style and organization. Write in the same voice and use the same formatting conventions (e.g. if the example uses bullet points, use bullet points; if it is flowing prose, use flowing prose).`
+  } else {
+    closingInstruction = `Write a brief, factual CRM note summarizing the call outcome and next steps. Plain text only — no markdown formatting, no bullet symbols, no headers. Keep it to 3-5 sentences.`
   }
 
   const prompt = `You are writing a concise internal HubSpot CRM note for a TrovaTrip sales rep after a ${meetingType} call.
@@ -69,7 +75,7 @@ ${nextSteps ? `\nNext steps:\n- ${nextSteps}` : ''}
 ${actionItems ? `\nAction items:\n- ${actionItems}` : ''}
 ${templateSection}
 
-Write a brief, factual CRM note summarizing the call outcome and next steps. Plain text only — no markdown formatting, no bullet symbols, no headers. Keep it to 3-5 sentences.
+${closingInstruction}
 Return a JSON object with a single string field: "note".`
 
   try {
