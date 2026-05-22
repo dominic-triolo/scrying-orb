@@ -8,6 +8,8 @@ interface OutreachPanelProps {
   meetingId: string
   summaryText: string | null
   contacts: Contact[]
+  cachedNote: string | null
+  onNoteGenerated: (note: string) => void
 }
 
 function collectDeals(contacts: Contact[]): Deal[] {
@@ -30,12 +32,12 @@ function plainToHtml(text: string): string {
 }
 
 // ── Main component ─────────────────────────────────────────────────────────
-export default function OutreachPanel({ meetingId, summaryText, contacts }: OutreachPanelProps) {
+export default function OutreachPanel({ meetingId, summaryText, contacts, cachedNote, onNoteGenerated }: OutreachPanelProps) {
   const allDeals = useMemo(() => collectDeals(contacts), [contacts])
   const bodyRef = useRef<HTMLDivElement>(null)
 
-  // HubSpot note state
-  const [noteBody, setNoteBody] = useState(summaryText ?? '')
+  // HubSpot note state — seed from cache if available, else fall back to raw summary
+  const [noteBody, setNoteBody] = useState(cachedNote ?? summaryText ?? '')
   const [selectedDealIds, setSelectedDealIds] = useState<Set<string>>(
     () => new Set(allDeals.map((d) => d.id))
   )
@@ -47,15 +49,20 @@ export default function OutreachPanel({ meetingId, summaryText, contacts }: Outr
   const [generatingNote, setGeneratingNote] = useState(false)
   const [noteGenError, setNoteGenError] = useState<string | null>(null)
 
-  // Auto-generate on mount so the note always follows the template
+  // Auto-generate on first open (when no cached note exists yet)
   useEffect(() => {
+    if (cachedNote !== null) return  // already have a generated note — skip
     let cancelled = false
     async function autoGenerate() {
       setGeneratingNote(true)
       try {
         const res = await fetch(`/api/meetings/${meetingId}/generate-note`, { method: 'POST' })
         const data = await res.json()
-        if (!cancelled && res.ok) setNoteBody(data.note ?? '')
+        if (!cancelled && res.ok) {
+          const note = data.note ?? ''
+          setNoteBody(note)
+          onNoteGenerated(note)
+        }
       } catch {
         // silently fall back to summaryText already in state
       } finally {
@@ -64,7 +71,7 @@ export default function OutreachPanel({ meetingId, summaryText, contacts }: Outr
     }
     autoGenerate()
     return () => { cancelled = true }
-  }, [meetingId])
+  }, [meetingId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Email state
   const [emailDraft, setEmailDraft] = useState<{
@@ -90,7 +97,9 @@ export default function OutreachPanel({ meetingId, summaryText, contacts }: Outr
       const res = await fetch(`/api/meetings/${meetingId}/generate-note`, { method: 'POST' })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error ?? 'Failed to generate note')
-      setNoteBody(data.note)
+      const note = data.note ?? ''
+      setNoteBody(note)
+      onNoteGenerated(note)
     } catch (err: unknown) {
       setNoteGenError(err instanceof Error ? err.message : 'Unknown error')
     } finally {

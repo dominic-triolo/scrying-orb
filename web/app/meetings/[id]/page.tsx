@@ -32,6 +32,7 @@ export default function MeetingPage() {
   const [typeEdit, setTypeEdit] = useState(false)
   const [savingType, setSavingType] = useState(false)
   const [selectedType, setSelectedType] = useState('')
+  const [cachedNote, setCachedNote] = useState<string | null>(null)
 
   useEffect(() => {
     fetch('/api/me')
@@ -263,6 +264,8 @@ export default function MeetingPage() {
                     : null
                 }
                 contacts={meeting.contacts}
+                cachedNote={cachedNote}
+                onNoteGenerated={setCachedNote}
               />
             )}
 
