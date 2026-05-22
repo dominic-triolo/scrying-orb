@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Contact, Deal } from '@/lib/db'
 import RichEditor from '@/components/RichEditor'
 
@@ -46,6 +46,25 @@ export default function OutreachPanel({ meetingId, summaryText, contacts }: Outr
   // Note generation state
   const [generatingNote, setGeneratingNote] = useState(false)
   const [noteGenError, setNoteGenError] = useState<string | null>(null)
+
+  // Auto-generate on mount so the note always follows the template
+  useEffect(() => {
+    let cancelled = false
+    async function autoGenerate() {
+      setGeneratingNote(true)
+      try {
+        const res = await fetch(`/api/meetings/${meetingId}/generate-note`, { method: 'POST' })
+        const data = await res.json()
+        if (!cancelled && res.ok) setNoteBody(data.note ?? '')
+      } catch {
+        // silently fall back to summaryText already in state
+      } finally {
+        if (!cancelled) setGeneratingNote(false)
+      }
+    }
+    autoGenerate()
+    return () => { cancelled = true }
+  }, [meetingId])
 
   // Email state
   const [emailDraft, setEmailDraft] = useState<{
@@ -187,7 +206,7 @@ export default function OutreachPanel({ meetingId, summaryText, contacts }: Outr
               <button onClick={generateNote} disabled={generatingNote}
                 className="text-xs text-gray-500 hover:text-gray-700 transition-colors disabled:opacity-50"
               >
-                {generatingNote ? 'Generating…' : noteBody.trim() ? 'Regenerate with AI' : 'Generate with AI'}
+                {generatingNote ? 'Generating…' : 'Regenerate with AI'}
               </button>
               <button onClick={submitNote}
                 disabled={noteSubmitting || !noteBody.trim() || selectedDealIds.size === 0}
