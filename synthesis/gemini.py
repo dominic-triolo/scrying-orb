@@ -69,15 +69,34 @@ def _extract_json(text: str) -> dict:
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
-        # Escape any literal control characters inside string values and retry
-        cleaned = _escape_control_chars(cleaned)
+        pass
+
+    # Escape any literal control characters inside string values and retry
+    cleaned = _escape_control_chars(cleaned)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+
+    # Last resort: extract the outermost {...} block and try again
+    match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+    if match:
         try:
-            return json.loads(cleaned)
-        except json.JSONDecodeError as e:
-            match = re.search(r"\{.*\}", cleaned, re.DOTALL)
-            if match:
-                return json.loads(match.group())
-            raise ValueError(f"Could not parse JSON from Gemini response: {e}\n\nRaw:\n{text[:500]}")
+            return json.loads(match.group())
+        except json.JSONDecodeError:
+            pass
+
+    # All attempts failed — log context around the failure position to aid diagnosis
+    try:
+        json.loads(cleaned)
+    except json.JSONDecodeError as e:
+        pos = e.pos or 0
+        snippet = cleaned[max(0, pos - 120):pos + 120]
+        raise ValueError(
+            f"Could not parse JSON from Gemini response: {e}\n"
+            f"Around position {pos}:\n...{snippet}...\n"
+            f"Full raw response (first 1000 chars):\n{text[:1000]}"
+        )
 
 
 class GeminiClient:
@@ -85,27 +104,35 @@ class GeminiClient:
         self._api_key = config.gemini_api_key
         self._model_name = config.gemini_model
 
-    def synthesize(self, transcript: str, meeting_type: str) -> dict:
+    def synthesize(self, transcript: str, meeting_type: str, max_retries: int = 2) -> dict:
         """
         Call Gemini with the appropriate prompt for this meeting type.
+        Retries up to max_retries times if JSON parsing fails (Gemini is
+        non-deterministic so a retry usually produces valid output).
         Returns the parsed JSON output dict.
         """
         system_prompt = _load_prompt(meeting_type)
         user_content = USER_PROMPT_PREFIX + transcript
-
         client = genai.Client(api_key=self._api_key)
 
-        logger.info(f"Calling Gemini ({self._model_name}) for meeting_type={meeting_type}")
-        response = client.models.generate_content(
-            model=self._model_name,
-            contents=user_content,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                response_mime_type="application/json",
-            ),
-        )
-        raw = response.text
+        last_error: Exception | None = None
+        for attempt in range(1, max_retries + 1):
+            logger.info(f"Calling Gemini ({self._model_name}) for meeting_type={meeting_type} (attempt {attempt}/{max_retries})")
+            response = client.models.generate_content(
+                model=self._model_name,
+                contents=user_content,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    response_mime_type="application/json",
+                ),
+            )
+            raw = response.text
+            try:
+                result = _extract_json(raw)
+                logger.info(f"Gemini returned {len(result)} field(s): {list(result.keys())}")
+                return result
+            except ValueError as e:
+                last_error = e
+                logger.warning(f"JSON parse failed on attempt {attempt}: {e}")
 
-        result = _extract_json(raw)
-        logger.info(f"Gemini returned {len(result)} field(s): {list(result.keys())}")
-        return result
+        raise ValueError(f"Gemini JSON parsing failed after {max_retries} attempts") from last_error
