@@ -54,8 +54,9 @@ def process_row(
             None,
         )
 
-        # 2. Determine meeting type: try HubSpot first, fall back to keyword detection
+        # 2. Determine meeting type + outcome: try HubSpot first, fall back to keyword detection
         meeting_type, meeting_type_source = detect_meeting_type(row["meeting_name"])
+        meeting_outcome: str | None = None
 
         raw_dt = row.get("meeting_datetime", "")
         if raw_dt:
@@ -65,28 +66,58 @@ def process_row(
                     cid = contact.get("hubspot_contact_id")
                     if not cid:
                         continue
-                    hs_type_label = hubspot.find_meeting_type(cid, row["meeting_name"], meeting_date)
-                    if hs_type_label:
-                        type_id = db.get_meeting_type_id_by_label(hs_type_label)
+                    hs_info = hubspot.find_meeting_info(cid, row["meeting_name"], meeting_date)
+                    # Capture outcome regardless of whether type is resolved
+                    if hs_info.get("outcome"):
+                        meeting_outcome = hs_info["outcome"]
+                    if hs_info.get("activity_type"):
+                        type_id = db.get_meeting_type_id_by_label(hs_info["activity_type"])
                         if type_id:
                             meeting_type = type_id
                             meeting_type_source = "hubspot"
-                            break
+                    # Stop at first contact that yields a HubSpot match
+                    if hs_info.get("activity_type") or hs_info.get("outcome"):
+                        break
             except (ValueError, AttributeError) as exc:
-                logger.warning(f"HubSpot meeting type lookup skipped: {exc}")
+                logger.warning(f"HubSpot meeting info lookup skipped: {exc}")
 
-        logger.info(f"Meeting type: {meeting_type} ({meeting_type_source})")
+        logger.info(f"Meeting type: {meeting_type} ({meeting_type_source}), outcome: {meeting_outcome}")
 
-        # 3. Read transcript from Shared Meetings Drive folder
+        # 3. Gate synthesis on meeting outcome
+        # If HubSpot reports a known outcome that isn't COMPLETED, skip synthesis
+        # and store the meeting record with status reflecting the outcome.
+        if meeting_outcome and meeting_outcome.upper() != "COMPLETED":
+            logger.info(
+                f"Skipping synthesis for {pairing_key}: outcome={meeting_outcome}"
+            )
+            transcript = drive.read_transcript(row["transcript_copy_id"])
+            talk_ratio = compute_talk_ratio(transcript, row.get("recording_owner", ""))
+            meeting_id = db.upsert_meeting(
+                row=row,
+                meeting_type=meeting_type,
+                meeting_type_source=meeting_type_source,
+                synthesis={},
+                talk_ratio=talk_ratio,
+                hubspot_deal_id=hubspot_deal_id,
+                transcript_text=transcript,
+                meeting_outcome=meeting_outcome,
+                skip_synthesis=True,
+            )
+            db.upsert_contacts(meeting_id, contacts)
+            sheet.mark_complete(row["row_index"])
+            logger.info(f"Stored {meeting_outcome} meeting without synthesis: {pairing_key}")
+            return
+
+        # 4. Read transcript from Shared Meetings Drive folder
         transcript = drive.read_transcript(row["transcript_copy_id"])
 
-        # 4. Compute talk ratio (pure string parsing — no API call)
+        # 5. Compute talk ratio (pure string parsing — no API call)
         talk_ratio = compute_talk_ratio(transcript, row.get("recording_owner", ""))
 
-        # 5. Run Gemini synthesis
+        # 6. Run Gemini synthesis
         synthesis = gemini.synthesize(transcript, meeting_type)
 
-        # 6. Write to Postgres
+        # 7. Write to Postgres
         meeting_id = db.upsert_meeting(
             row=row,
             meeting_type=meeting_type,
@@ -95,6 +126,7 @@ def process_row(
             talk_ratio=talk_ratio,
             hubspot_deal_id=hubspot_deal_id,
             transcript_text=transcript,
+            meeting_outcome=meeting_outcome,
         )
         db.upsert_contacts(meeting_id, contacts)
 

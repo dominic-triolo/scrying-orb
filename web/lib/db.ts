@@ -9,6 +9,7 @@ export interface Meeting {
   meeting_datetime: string | null
   meeting_type: string | null
   meeting_type_source: string | null
+  meeting_outcome: string | null
   recording_owner: string | null
   rep_talk_pct: number | null
   prospect_talk_pct: number | null
@@ -37,6 +38,7 @@ export interface MeetingDetail extends Meeting {
   notes: string | null
   hubspot_deal_id: string | null
   contacts: Contact[]
+  // meeting_outcome inherited from Meeting
 }
 
 interface GetMeetingsOptions {
@@ -55,6 +57,7 @@ export async function getMeetings({ repEmail }: GetMeetingsOptions = {}): Promis
       m.recording_owner,
       m.rep_talk_pct,
       m.prospect_talk_pct,
+      m.meeting_outcome,
       m.status,
       COALESCE(
         array_agg(mc.email ORDER BY mc.email) FILTER (WHERE mc.email IS NOT NULL),
@@ -62,7 +65,7 @@ export async function getMeetings({ repEmail }: GetMeetingsOptions = {}): Promis
       ) AS attendees
     FROM meetings m
     LEFT JOIN meeting_contacts mc ON mc.meeting_id = m.id
-    WHERE m.status IN ('complete', 'pending_synthesis')
+    WHERE m.status IN ('complete', 'pending_synthesis', 'no_show')
       AND ($1::text IS NULL OR m.recording_owner = $1)
     GROUP BY m.id
     ORDER BY m.meeting_datetime DESC NULLS LAST
@@ -91,6 +94,7 @@ export async function getMeetingById(id: string): Promise<MeetingDetail | null> 
       m.transcript_text,
       m.notes,
       m.hubspot_deal_id,
+      m.meeting_outcome,
       COALESCE(
         json_agg(
           json_build_object(

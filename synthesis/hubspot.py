@@ -148,21 +148,28 @@ class HubSpotClient:
         logger.info(f"Found {len(deals)} deal(s) for contact {contact_id}")
         return deals
 
-    def find_meeting_type(
+    def find_meeting_info(
         self,
         contact_id: str,
         meeting_name: str,
         meeting_date: datetime,
-    ) -> str | None:
+    ) -> dict:
         """
-        Look up hs_activity_type for the meeting logged in HubSpot matching this
-        contact, title, and date (day-level precision).
+        Look up HubSpot meeting properties matching this contact, title, and date.
 
-        Returns the hs_activity_type string (e.g. "Intro Call") or None if no
-        unambiguous match with a type assigned is found.
+        Returns a dict:
+            {
+                "activity_type": str | None,  # hs_activity_type (e.g. "Intro Call")
+                "outcome":       str | None,  # hs_meeting_outcome (e.g. "COMPLETED")
+            }
+
+        Both fields are None if no unambiguous match is found.
+        Uses a single pair of API calls to retrieve both values simultaneously.
         """
+        empty = {"activity_type": None, "outcome": None}
+
         if not self._enabled:
-            return None
+            return empty
 
         # 1. Get meeting IDs associated with this contact
         try:
@@ -174,34 +181,39 @@ class HubSpotClient:
             )
         except requests.RequestException as exc:
             logger.warning(f"HubSpot association fetch failed for contact {contact_id}: {exc}")
-            return None
+            return empty
 
         if not assoc_resp.ok:
             logger.warning(f"HubSpot associations returned {assoc_resp.status_code} for contact {contact_id}")
-            return None
+            return empty
 
         meeting_ids = [str(r["toObjectId"]) for r in assoc_resp.json().get("results", [])]
         if not meeting_ids:
-            return None
+            return empty
 
-        # 2. Batch fetch meeting properties
+        # 2. Batch fetch meeting properties (type + outcome in one call)
         try:
             batch_resp = requests.post(
                 f"{HUBSPOT_BASE}/crm/v3/objects/meetings/batch/read",
                 headers=self._headers(),
                 json={
                     "inputs": [{"id": mid} for mid in meeting_ids[:100]],
-                    "properties": ["hs_meeting_title", "hs_timestamp", "hs_activity_type"],
+                    "properties": [
+                        "hs_meeting_title",
+                        "hs_timestamp",
+                        "hs_activity_type",
+                        "hs_meeting_outcome",
+                    ],
                 },
                 timeout=10,
             )
         except requests.RequestException as exc:
             logger.warning(f"HubSpot batch meeting fetch failed: {exc}")
-            return None
+            return empty
 
         if not batch_resp.ok:
             logger.warning(f"HubSpot batch read returned {batch_resp.status_code}")
-            return None
+            return empty
 
         meetings = batch_resp.json().get("results", [])
         target_title = _normalize_title(meeting_name)
@@ -210,8 +222,8 @@ class HubSpotClient:
         matches = []
         for m in meetings:
             props = m.get("properties", {})
-            activity_type = props.get("hs_activity_type") or ""
-            if not activity_type.strip():
+            activity_type = (props.get("hs_activity_type") or "").strip()
+            if not activity_type:
                 continue  # skip untyped meetings (duplicates / manually logged)
 
             hs_title = _normalize_title(props.get("hs_meeting_title") or "")
@@ -232,16 +244,24 @@ class HubSpotClient:
                 except (ValueError, TypeError):
                     pass  # if we can't parse the date, still consider it a title match
 
-            matches.append(activity_type.strip())
+            outcome = (props.get("hs_meeting_outcome") or "").strip() or None
+            matches.append({"activity_type": activity_type, "outcome": outcome})
 
         if len(matches) == 1:
-            logger.info(f"HubSpot meeting type for '{meeting_name}': {matches[0]}")
-            return matches[0]
+            result = matches[0]
+            logger.info(
+                f"HubSpot meeting info for '{meeting_name}': "
+                f"type={result['activity_type']} outcome={result['outcome']}"
+            )
+            return result
         if len(matches) > 1:
-            logger.warning(f"Ambiguous HubSpot meeting type matches for '{meeting_name}': {matches} — falling back")
-            return None
+            logger.warning(
+                f"Ambiguous HubSpot meeting matches for '{meeting_name}': "
+                f"{matches} — falling back"
+            )
+            return empty
 
-        return None
+        return empty
 
 
 def _normalize_title(title: str) -> str:

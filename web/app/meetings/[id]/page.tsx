@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import TypeBadge from '@/components/TypeBadge'
+import OutcomeBadge from '@/components/OutcomeBadge'
 import SynthesisPanel from '@/components/SynthesisPanel'
 import OutreachPanel from '@/components/OutreachPanel'
 import AskPanel from '@/components/AskPanel'
@@ -175,6 +176,9 @@ export default function MeetingPage() {
               ) : (
                 <>
                   <TypeBadge type={meeting.meeting_type} />
+                  {meeting.meeting_outcome && (
+                    <OutcomeBadge outcome={meeting.meeting_outcome} />
+                  )}
                   {meeting.meeting_type_source === 'default' && (
                     <span className="text-xs text-gray-400 italic">(auto)</span>
                   )}

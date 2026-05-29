@@ -29,6 +29,8 @@ class DBClient:
         talk_ratio: dict,
         hubspot_deal_id: str | None = None,
         transcript_text: str | None = None,
+        meeting_outcome: str | None = None,
+        skip_synthesis: bool = False,
     ) -> str:
         """
         Insert or update the meeting row. Returns the meetings.id (UUID string).
@@ -45,6 +47,10 @@ class DBClient:
             except ValueError:
                 pass
 
+        # Meetings without synthesis (e.g. NO_SHOW) get a distinct status
+        status = "no_show" if skip_synthesis and meeting_outcome else "complete"
+        synthesized_at = None if skip_synthesis else now
+
         sql = """
             INSERT INTO meetings (
                 pairing_key, meeting_name, meeting_datetime,
@@ -52,7 +58,7 @@ class DBClient:
                 hubspot_deal_id,
                 meeting_type, meeting_type_source,
                 synthesis_output, rep_talk_pct, prospect_talk_pct,
-                transcript_text,
+                transcript_text, meeting_outcome,
                 status, processed_at, synthesized_at
             ) VALUES (
                 %(pairing_key)s, %(meeting_name)s, %(meeting_datetime)s,
@@ -60,8 +66,8 @@ class DBClient:
                 %(hubspot_deal_id)s,
                 %(meeting_type)s, %(meeting_type_source)s,
                 %(synthesis_output)s, %(rep_talk_pct)s, %(prospect_talk_pct)s,
-                %(transcript_text)s,
-                'complete', %(processed_at)s, %(synthesized_at)s
+                %(transcript_text)s, %(meeting_outcome)s,
+                %(status)s, %(processed_at)s, %(synthesized_at)s
             )
             ON CONFLICT (pairing_key) DO UPDATE SET
                 meeting_type        = EXCLUDED.meeting_type,
@@ -70,8 +76,9 @@ class DBClient:
                 rep_talk_pct        = EXCLUDED.rep_talk_pct,
                 prospect_talk_pct   = EXCLUDED.prospect_talk_pct,
                 transcript_text     = EXCLUDED.transcript_text,
+                meeting_outcome     = COALESCE(EXCLUDED.meeting_outcome, meetings.meeting_outcome),
                 hubspot_deal_id     = COALESCE(EXCLUDED.hubspot_deal_id, meetings.hubspot_deal_id),
-                status              = 'complete',
+                status              = EXCLUDED.status,
                 synthesized_at      = EXCLUDED.synthesized_at
             RETURNING id
         """
@@ -90,8 +97,10 @@ class DBClient:
             "rep_talk_pct":       talk_ratio.get("rep_talk_pct"),
             "prospect_talk_pct":  talk_ratio.get("prospect_talk_pct"),
             "transcript_text":    transcript_text,
+            "meeting_outcome":    meeting_outcome,
+            "status":             status,
             "processed_at":       row.get("processed_at") or now,
-            "synthesized_at":     now,
+            "synthesized_at":     synthesized_at,
         }
 
         with self._connect() as conn:

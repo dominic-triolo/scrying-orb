@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import TypeBadge from './TypeBadge'
+import OutcomeBadge from './OutcomeBadge'
 import type { Meeting } from '@/lib/db'
 
 function formatDate(iso: string | null): string {
@@ -22,11 +23,14 @@ export default function MeetingCard({ meeting }: { meeting: Meeting }) {
       <div className={`rounded-xl border bg-white p-5 shadow-sm hover:shadow-md transition-all ${
         meeting.status === 'pending_synthesis'
           ? 'border-amber-200 hover:border-amber-300 opacity-75'
+          : meeting.status === 'no_show'
+          ? 'border-red-100 hover:border-red-200 opacity-80'
           : 'border-gray-200 hover:border-blue-300'
       }`}>
         <div className="flex items-start justify-between gap-2 mb-3">
           <div className="flex items-center gap-2 flex-wrap">
             <TypeBadge type={meeting.meeting_type} />
+            <OutcomeBadge outcome={meeting.meeting_outcome} />
             {meeting.status === 'pending_synthesis' && (
               <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 border border-amber-200 px-2 py-0.5 text-xs text-amber-700">
                 <svg className="h-3 w-3 animate-spin" fill="none" viewBox="0 0 24 24">
