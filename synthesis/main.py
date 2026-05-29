@@ -14,11 +14,14 @@ import time
 from config import Config
 from db import DBClient
 from drive import DriveClient
+from forecast import ForecastClient
 from gemini import GeminiClient
 from hubspot import HubSpotClient
 from sheet import SheetClient
 from datetime import datetime
 from utils import compute_talk_ratio, detect_meeting_type
+
+SILENT_FORECAST_PROPERTY = "silent_forecast_probability"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,6 +35,7 @@ def process_row(
     sheet: SheetClient,
     drive: DriveClient,
     gemini: GeminiClient,
+    forecaster: ForecastClient,
     hubspot: HubSpotClient,
     db: DBClient,
 ) -> None:
@@ -130,7 +134,18 @@ def process_row(
         )
         db.upsert_contacts(meeting_id, contacts)
 
-        # 7. Mark sheet row complete
+        # 8. Silent forecast — intro calls only, best-effort (never blocks completion)
+        if meeting_type == "intro" and hubspot_deal_id:
+            try:
+                prob = forecaster.predict(synthesis)
+                if prob is not None:
+                    hubspot.update_deal_property(
+                        hubspot_deal_id, SILENT_FORECAST_PROPERTY, str(prob)
+                    )
+            except Exception as forecast_err:
+                logger.warning(f"Silent forecast failed (non-fatal): {forecast_err}")
+
+        # 9. Mark sheet row complete
         sheet.mark_complete(row["row_index"])
         logger.info(f"Complete: {pairing_key}")
 
@@ -167,11 +182,12 @@ def run() -> None:
     logger.info("Synthesis service starting up")
     config = Config.from_env()
 
-    sheet   = SheetClient(config)
-    drive   = DriveClient(config)
-    gemini  = GeminiClient(config)
-    hubspot = HubSpotClient(config)
-    db      = DBClient(config)
+    sheet      = SheetClient(config)
+    drive      = DriveClient(config)
+    gemini     = GeminiClient(config)
+    forecaster = ForecastClient(config)
+    hubspot    = HubSpotClient(config)
+    db         = DBClient(config)
 
     logger.info(f"Polling every {config.poll_interval_seconds}s")
 
@@ -180,7 +196,7 @@ def run() -> None:
             # 1. New meetings from the Google Sheet
             pending = sheet.get_pending_rows()
             for row in pending:
-                process_row(row, sheet, drive, gemini, hubspot, db)
+                process_row(row, sheet, drive, gemini, forecaster, hubspot, db)
 
             # 2. Meetings queued for re-synthesis due to manual type change
             for meeting in db.get_pending_resynthesis():

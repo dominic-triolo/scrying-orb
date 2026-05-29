@@ -264,6 +264,29 @@ class HubSpotClient:
         return empty
 
 
+    def update_deal_property(self, deal_id: str, property_name: str, value) -> bool:
+        """
+        Update a single property on a HubSpot deal via PATCH.
+        Returns True on success, False on failure (caller should log and continue).
+        """
+        if not self._enabled:
+            logger.warning("HubSpot disabled — skipping deal property update")
+            return False
+        try:
+            resp = requests.patch(
+                f"{HUBSPOT_BASE}/crm/v3/objects/deals/{deal_id}",
+                headers=self._headers(),
+                json={"properties": {property_name: value}},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            logger.info(f"Updated deal {deal_id}: {property_name}={value}")
+            return True
+        except requests.RequestException as exc:
+            logger.error(f"Failed to update deal {deal_id} property {property_name}: {exc}")
+            return False
+
+
 def _normalize_title(title: str) -> str:
     """Lowercase, collapse whitespace, strip punctuation for fuzzy title matching."""
     title = title.lower().strip()
