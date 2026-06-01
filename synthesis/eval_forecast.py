@@ -25,6 +25,7 @@ import os
 import sys
 import time
 from collections import defaultdict
+from typing import Optional
 
 # Allow running from the synthesis/ directory directly
 sys.path.insert(0, os.path.dirname(__file__))
@@ -49,7 +50,7 @@ def save_cache(cache: dict) -> None:
         json.dump(cache, f, ensure_ascii=False, indent=2)
 
 
-def load_training_data(csv_path: str) -> list[dict]:
+def load_training_data(csv_path: str) -> list:
     rows = []
     with open(csv_path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
@@ -68,7 +69,7 @@ def load_training_data(csv_path: str) -> list[dict]:
     return rows
 
 
-def run_synthesis(row: dict, gemini: GeminiClient, cache: dict) -> dict | None:
+def run_synthesis(row: dict, gemini: GeminiClient, cache: dict) -> Optional[dict]:
     key = f"synthesis_{row['idx']}"
     if key in cache:
         return cache[key]
@@ -84,7 +85,7 @@ def run_synthesis(row: dict, gemini: GeminiClient, cache: dict) -> dict | None:
         return None
 
 
-def run_forecast(row_idx: int, synthesis: dict, forecaster: ForecastClient, cache: dict) -> float | None:
+def run_forecast(row_idx: int, synthesis: dict, forecaster: ForecastClient, cache: dict) -> Optional[float]:
     key = f"forecast_{row_idx}"
     if key in cache:
         return cache[key]
@@ -162,7 +163,21 @@ def main():
     parser.add_argument("--synthesis-only", action="store_true", help="Only run synthesis step, skip forecast")
     args = parser.parse_args()
 
-    config = Config.from_env()
+    # Build a minimal config — eval only needs Gemini credentials
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        print("ERROR: GEMINI_API_KEY environment variable is not set.")
+        sys.exit(1)
+    config = Config(
+        google_service_account_info={},
+        log_sheet_id="",
+        log_sheet_tab="",
+        gemini_api_key=api_key,
+        gemini_model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
+        database_url="",
+        hubspot_token="",
+        poll_interval_seconds=300,
+    )
     gemini = GeminiClient(config)
     forecaster = ForecastClient(config)
 

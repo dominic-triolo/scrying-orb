@@ -12,6 +12,7 @@ against the rep's manual forecast category.
 import json
 import logging
 import os
+from typing import Optional
 
 from google import genai
 from google.genai import types
@@ -80,7 +81,7 @@ class ForecastClient:
         self._model_name = config.gemini_model
         self._system_prompt = _load_forecast_prompt()
 
-    def predict(self, synthesis: dict, max_retries: int = 2) -> float | None:
+    def predict(self, synthesis: dict, max_retries: int = 2) -> Optional[float]:
         """
         Predict host conversion probability from a synthesis output dict.
 
@@ -90,7 +91,7 @@ class ForecastClient:
         user_content = _build_user_content(synthesis)
         client = genai.Client(api_key=self._api_key)
 
-        last_error: Exception | None = None
+        last_error: Optional[Exception] = None
         for attempt in range(1, max_retries + 1):
             logger.info(f"Forecast attempt {attempt}/{max_retries}")
             try:
