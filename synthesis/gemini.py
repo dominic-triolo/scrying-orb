@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+import time
 
 from google import genai
 from google.genai import types
@@ -104,7 +105,7 @@ class GeminiClient:
         self._api_key = config.gemini_api_key
         self._model_name = config.gemini_model
 
-    def synthesize(self, transcript: str, meeting_type: str, max_retries: int = 2) -> dict:
+    def synthesize(self, transcript: str, meeting_type: str, max_retries: int = 3) -> dict:
         """
         Call Gemini with the appropriate prompt for this meeting type.
         Retries up to max_retries times if JSON parsing fails (Gemini is
@@ -134,5 +135,7 @@ class GeminiClient:
             except ValueError as e:
                 last_error = e
                 logger.warning(f"JSON parse failed on attempt {attempt}: {e}")
+                if attempt < max_retries:
+                    time.sleep(2)  # brief pause before retry
 
         raise ValueError(f"Gemini JSON parsing failed after {max_retries} attempts") from last_error
