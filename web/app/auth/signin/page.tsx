@@ -11,10 +11,10 @@ function SignInCard() {
   return (
     <div className="w-full max-w-sm bg-white rounded-2xl shadow-lg px-10 py-12 flex flex-col items-center gap-6">
       {/* Orb */}
-      <div className="flex flex-col items-center gap-2">
-        <span className="text-6xl select-none">🔮</span>
+      <div className="flex items-center gap-3">
+        <span className="text-5xl select-none">🔮</span>
         <h1 className="text-2xl font-bold tracking-tight text-gray-900">Scrying Orb</h1>
-        <span className="text-6xl select-none">🔮</span>
+        <span className="text-5xl select-none">🔮</span>
       </div>
 
       <p className="text-sm text-gray-500 text-center leading-relaxed">
