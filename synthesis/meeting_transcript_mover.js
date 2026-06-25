@@ -65,8 +65,15 @@ const DATE_PATTERN = /\d{4}\/\d{2}\/\d{2}/;
  * Returns null if no date pattern is found (i.e. not a Meet file).
  */
 function extractPairingKey(filename) {
-  // Capture everything up to and including the optional timezone token after HH:MM
-  const match = filename.match(/^(.+?\d{4}\/\d{2}\/\d{2}(?:\s+\d{2}:\d{2}(?:\s+[A-Z]{2,5})?)?)/);
+  // Capture everything up to and including HH:MM, but deliberately exclude
+  // any trailing timezone token (PST, GMT, UTC, etc.) so that transcript and
+  // recording filenames always normalize to the same key regardless of whether
+  // Google appended a timezone to one but not the other.
+  //
+  // "Project Sync - 2025/06/10 14:30 PST - Notes by Gemini"  → "Project Sync - 2025/06/10 14:30"
+  // "Project Sync - 2025/06/10 14:30 - Recording"            → "Project Sync - 2025/06/10 14:30"
+  // "Project Sync - 2025/06/10 14:30"                        → "Project Sync - 2025/06/10 14:30"
+  const match = filename.match(/^(.+?\d{4}\/\d{2}\/\d{2}(?:\s+\d{2}:\d{2})?)/);
   return match ? match[1].trim() : null;
 }
 
