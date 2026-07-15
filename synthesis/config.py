@@ -23,6 +23,11 @@ class Config:
     # Poller
     poll_interval_seconds: int
 
+    # Nurture tool ingest (meeting.processed emit) — all optional; unset ⇒ emit is skipped
+    nurture_ingest_url: str = ""
+    nurture_ingest_secret: str = ""
+    nurture_web_url: str = ""       # base URL of the scrying-orb web app, for the deep link
+
     @classmethod
     def from_env(cls) -> "Config":
         sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
@@ -38,4 +43,7 @@ class Config:
             database_url=os.environ["DATABASE_URL"],
             hubspot_token=os.environ.get("HUBSPOT_TOKEN", ""),
             poll_interval_seconds=int(os.environ.get("POLL_INTERVAL_SECONDS", "300")),
+            nurture_ingest_url=os.environ.get("NURTURE_INGEST_URL", ""),
+            nurture_ingest_secret=os.environ.get("NURTURE_INGEST_SECRET", ""),
+            nurture_web_url=os.environ.get("SCRYING_ORB_WEB_URL", ""),
         )
