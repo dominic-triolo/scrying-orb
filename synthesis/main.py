@@ -13,6 +13,7 @@ import time
 
 from config import Config
 from db import DBClient
+from nurture_emit import emit_meeting_processed
 from drive import DriveClient
 from forecast import ForecastClient
 from gemini import GeminiClient
@@ -30,6 +31,30 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _emit(config, meeting_id, row, meeting_type, meeting_type_source, outcome, status,
+          synthesis, contacts, hubspot_deal_id, synthesized):
+    """Best-effort nurture emit — never let it break synthesis completion."""
+    try:
+        emit_meeting_processed(
+            config,
+            source_meeting_id=meeting_id,
+            pairing_key=row.get("pairing_key"),
+            meeting_name=row.get("meeting_name"),
+            meeting_type=meeting_type,
+            meeting_type_source=meeting_type_source,
+            meeting_datetime=row.get("meeting_datetime"),
+            outcome=outcome,
+            status=status,
+            recording_owner=row.get("recording_owner"),
+            synthesis=synthesis,
+            contacts=contacts,
+            hubspot_deal_id=hubspot_deal_id,
+            synthesized=synthesized,
+        )
+    except Exception as e:
+        logger.warning(f"nurture emit hook error (non-fatal): {e}")
+
+
 def process_row(
     row: dict,
     sheet: SheetClient,
@@ -38,6 +63,7 @@ def process_row(
     forecaster: ForecastClient,
     hubspot: HubSpotClient,
     db: DBClient,
+    config: Config = None,
 ) -> None:
     pairing_key = row["pairing_key"]
     logger.info(f"Processing: {pairing_key}")
@@ -109,6 +135,8 @@ def process_row(
             )
             db.upsert_contacts(meeting_id, contacts)
             sheet.mark_complete(row["row_index"])
+            _emit(config, meeting_id, row, meeting_type, meeting_type_source,
+                  meeting_outcome, "no_show", {}, contacts, hubspot_deal_id, synthesized=False)
             logger.info(f"Stored {meeting_outcome} meeting without synthesis: {pairing_key}")
             return
 
@@ -147,6 +175,9 @@ def process_row(
 
         # 9. Mark sheet row complete
         sheet.mark_complete(row["row_index"])
+        _emit(config, meeting_id, row, meeting_type, meeting_type_source,
+              meeting_outcome, "complete", synthesis, contacts, hubspot_deal_id,
+              synthesized=True)
         logger.info(f"Complete: {pairing_key}")
 
     except Exception as err:
@@ -196,7 +227,7 @@ def run() -> None:
             # 1. New meetings from the Google Sheet
             pending = sheet.get_pending_rows()
             for row in pending:
-                process_row(row, sheet, drive, gemini, forecaster, hubspot, db)
+                process_row(row, sheet, drive, gemini, forecaster, hubspot, db, config)
 
             # 2. Meetings queued for re-synthesis due to manual type change
             for meeting in db.get_pending_resynthesis():
