@@ -116,9 +116,15 @@ class DBClient:
         """
         Return meetings that need re-synthesis due to a manual type change.
         These already have transcript_text stored, so no Drive read is needed.
+
+        Selects the full set of fields the nurture emit needs (not just what
+        re-synthesis itself uses) so a manual type correction can be pushed to
+        the nurture tool after re-synthesis.
         """
         sql = """
-            SELECT id, meeting_type, transcript_text, recording_owner
+            SELECT id, pairing_key, meeting_name, meeting_datetime,
+                   meeting_type, meeting_type_source, meeting_outcome,
+                   transcript_text, recording_owner, hubspot_deal_id
             FROM meetings
             WHERE status = 'pending_synthesis'
               AND transcript_text IS NOT NULL
@@ -129,6 +135,34 @@ class DBClient:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(sql)
                 return [dict(r) for r in cur.fetchall()]
+
+    def get_contacts(self, meeting_id: str) -> list[dict]:
+        """
+        Fetch stored contacts for a meeting, shaped for the nurture emit
+        (email / hubspot_contact_id / deals). Used by the re-synthesis emit,
+        which — unlike process_row — has no in-memory contacts to hand.
+        """
+        sql = """
+            SELECT email, hubspot_contact_id, deals
+            FROM meeting_contacts
+            WHERE meeting_id = %(id)s
+        """
+        with self._connect() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(sql, {"id": meeting_id})
+                rows = [dict(r) for r in cur.fetchall()]
+        # deals is stored via json.dumps; normalize to a list whether the column
+        # comes back parsed (jsonb) or as a raw string (text).
+        for r in rows:
+            d = r.get("deals")
+            if isinstance(d, str):
+                try:
+                    r["deals"] = json.loads(d)
+                except (ValueError, TypeError):
+                    r["deals"] = []
+            elif d is None:
+                r["deals"] = []
+        return rows
 
     def complete_resynthesis(
         self,
