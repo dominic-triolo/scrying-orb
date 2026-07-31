@@ -175,9 +175,13 @@ def process_row(
 
         # 9. Mark sheet row complete
         sheet.mark_complete(row["row_index"])
+        # A synthesized meeting is a completed call. HubSpot often has no matching
+        # activity (esp. for calls it couldn't pair — the same ones that get mis-typed),
+        # leaving meeting_outcome None; emit COMPLETED so the nurture tool, which gates
+        # intro calls into awaiting-stepper on outcome == COMPLETED, actually surfaces it.
         _emit(config, meeting_id, row, meeting_type, meeting_type_source,
-              meeting_outcome, "complete", synthesis, contacts, hubspot_deal_id,
-              synthesized=True)
+              meeting_outcome or "COMPLETED", "complete", synthesis, contacts,
+              hubspot_deal_id, synthesized=True)
         logger.info(f"Complete: {pairing_key}")
 
     except Exception as err:
@@ -189,10 +193,16 @@ def resynthesize_meeting(
     meeting: dict,
     gemini: GeminiClient,
     db: DBClient,
+    config: Config = None,
 ) -> None:
     """
     Re-run Gemini synthesis on a meeting whose type was changed manually.
     Uses the transcript already stored in Postgres — no Sheet or Drive access needed.
+
+    Then emit meeting.processed to the nurture tool. A manual type change is exactly
+    when nurture needs to hear about it — e.g. an intro call the orb mis-typed as
+    'nurture' should now enter awaiting-stepper — and without this emit the correction
+    only ever lands in the orb's own DB and never reaches nurture.
     """
     meeting_id   = str(meeting["id"])
     meeting_type = meeting["meeting_type"]
@@ -207,6 +217,28 @@ def resynthesize_meeting(
         logger.info(f"Re-synthesis done for {meeting_id}")
     except Exception as err:
         logger.error(f"Re-synthesis error for {meeting_id}: {err}", exc_info=True)
+        return
+
+    # Propagate the corrected meeting to nurture (best-effort; _emit never raises).
+    dt = meeting.get("meeting_datetime")
+    emit_row = {
+        "pairing_key":      meeting.get("pairing_key"),
+        "meeting_name":     meeting.get("meeting_name"),
+        # meeting_datetime comes back from Postgres as a datetime; the emit json-encodes
+        # the payload, so hand it an ISO string (a raw datetime would make json.dumps
+        # raise inside _emit and silently drop the emit).
+        "meeting_datetime": dt.isoformat() if hasattr(dt, "isoformat") else dt,
+        "recording_owner":  recording_owner,
+    }
+    _emit(
+        config, meeting_id, emit_row,
+        meeting_type, meeting.get("meeting_type_source") or "manual",
+        # Re-synthesis only runs on stored transcripts of calls that happened; a null
+        # stored outcome means HubSpot never matched it, not that it didn't occur.
+        meeting.get("meeting_outcome") or "COMPLETED", "complete",
+        synthesis, db.get_contacts(meeting_id), meeting.get("hubspot_deal_id"),
+        synthesized=True,
+    )
 
 
 def run() -> None:
@@ -231,7 +263,7 @@ def run() -> None:
 
             # 2. Meetings queued for re-synthesis due to manual type change
             for meeting in db.get_pending_resynthesis():
-                resynthesize_meeting(meeting, gemini, db)
+                resynthesize_meeting(meeting, gemini, db, config)
 
         except Exception as poll_err:
             logger.error(f"Poller error: {poll_err}", exc_info=True)
