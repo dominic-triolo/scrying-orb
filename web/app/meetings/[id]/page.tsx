@@ -34,6 +34,8 @@ export default function MeetingPage() {
   const [savingType, setSavingType] = useState(false)
   const [selectedType, setSelectedType] = useState('')
   const [cachedNote, setCachedNote] = useState<string | null>(null)
+  const [analyzing, setAnalyzing] = useState(false)
+  const [analyzeError, setAnalyzeError] = useState<string | null>(null)
 
   useEffect(() => {
     fetch('/api/me')
@@ -73,6 +75,25 @@ export default function MeetingPage() {
     }
     setSavingType(false)
     setTypeEdit(false)
+  }
+
+  // On-demand synthesis for an imported (legacy) meeting. Fires only on click —
+  // imported meetings are never auto-analyzed.
+  async function analyzeMeeting() {
+    if (!meeting || analyzing) return
+    setAnalyzing(true)
+    setAnalyzeError(null)
+    try {
+      const res = await fetch(`/api/meetings/${id}/synthesize`, { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Analysis failed')
+      setMeeting((m) => m ? { ...m, synthesis_output: data.synthesis, status: 'complete' } : m)
+      setTab('analysis')
+    } catch (err) {
+      setAnalyzeError(err instanceof Error ? err.message : 'Analysis failed')
+    } finally {
+      setAnalyzing(false)
+    }
   }
 
   if (loading) {
@@ -193,11 +214,29 @@ export default function MeetingPage() {
             </div>
           </div>
 
-          {meeting.synthesis_output === null && meeting.meeting_type && (
+          {meeting.status === 'legacy' && meeting.synthesis_output === null ? (
+            <div className="mt-3">
+              <button
+                onClick={analyzeMeeting}
+                disabled={analyzing}
+                className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
+              >
+                {analyzing ? 'Analyzing…' : 'Analyze this meeting'}
+              </button>
+              <span className="ml-3 text-xs text-gray-400">
+                Imported meeting — AI analysis runs on request.
+              </span>
+              {analyzeError && (
+                <p className="mt-2 text-xs text-red-600 bg-red-50 rounded-md px-3 py-2 block w-fit">
+                  {analyzeError}
+                </p>
+              )}
+            </div>
+          ) : meeting.synthesis_output === null && meeting.meeting_type ? (
             <p className="mt-3 text-xs text-amber-600 bg-amber-50 rounded-md px-3 py-2 inline-block">
               Re-synthesis queued — the service will reprocess this meeting with the updated type shortly.
             </p>
-          )}
+          ) : null}
         </div>
 
         {/* Recording */}

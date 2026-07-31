@@ -15,6 +15,7 @@ export interface Meeting {
   prospect_talk_pct: number | null
   attendees: string[]
   status: string | null
+  import_source: string | null
 }
 
 export interface Deal {
@@ -59,13 +60,14 @@ export async function getMeetings({ repEmail }: GetMeetingsOptions = {}): Promis
       m.prospect_talk_pct,
       m.meeting_outcome,
       m.status,
+      m.import_source,
       COALESCE(
         array_agg(mc.email ORDER BY mc.email) FILTER (WHERE mc.email IS NOT NULL),
         '{}'
       ) AS attendees
     FROM meetings m
     LEFT JOIN meeting_contacts mc ON mc.meeting_id = m.id
-    WHERE m.status IN ('complete', 'pending_synthesis', 'no_show')
+    WHERE m.status IN ('complete', 'pending_synthesis', 'no_show', 'legacy')
       AND ($1::text IS NULL OR m.recording_owner = $1)
     GROUP BY m.id
     ORDER BY m.meeting_datetime DESC NULLS LAST
@@ -95,6 +97,8 @@ export async function getMeetingById(id: string): Promise<MeetingDetail | null> 
       m.notes,
       m.hubspot_deal_id,
       m.meeting_outcome,
+      m.status,
+      m.import_source,
       COALESCE(
         json_agg(
           json_build_object(
@@ -113,6 +117,26 @@ export async function getMeetingById(id: string): Promise<MeetingDetail | null> 
     [id]
   )
   return rows[0] ?? null
+}
+
+/**
+ * Persist an on-demand synthesis result and mark the meeting complete.
+ * Used by the legacy-meeting "Analyze" flow (web /api/meetings/[id]/synthesize).
+ */
+export async function completeSynthesis(
+  id: string,
+  synthesis: Record<string, unknown>
+): Promise<void> {
+  await pool.query(
+    `
+    UPDATE meetings
+    SET synthesis_output = $2,
+        status           = 'complete',
+        synthesized_at   = NOW()
+    WHERE id = $1
+    `,
+    [id, JSON.stringify(synthesis)]
+  )
 }
 
 // ── Templates ────────────────────────────────────────────────────────────────

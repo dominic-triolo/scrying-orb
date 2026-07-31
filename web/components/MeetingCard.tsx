@@ -25,6 +25,8 @@ export default function MeetingCard({ meeting }: { meeting: Meeting }) {
           ? 'border-amber-200 hover:border-amber-300 opacity-75'
           : meeting.status === 'no_show'
           ? 'border-red-100 hover:border-red-200 opacity-80'
+          : meeting.status === 'legacy'
+          ? 'border-violet-100 hover:border-violet-300'
           : 'border-gray-200 hover:border-blue-300'
       }`}>
         <div className="flex items-start justify-between gap-2 mb-3">
@@ -38,6 +40,11 @@ export default function MeetingCard({ meeting }: { meeting: Meeting }) {
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
                 </svg>
                 Re-synthesizing
+              </span>
+            )}
+            {meeting.status === 'legacy' && (
+              <span className="inline-flex items-center rounded-full bg-violet-50 border border-violet-200 px-2 py-0.5 text-xs text-violet-700">
+                Legacy · not analyzed
               </span>
             )}
           </div>
