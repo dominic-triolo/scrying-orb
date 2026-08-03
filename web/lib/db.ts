@@ -43,11 +43,33 @@ export interface MeetingDetail extends Meeting {
 }
 
 interface GetMeetingsOptions {
-  repEmail?: string // if set, filter to only this rep's meetings
+  repEmail?: string   // if set, restrict to this rep's meetings (non-leadership, or "mine")
+  q?: string          // free text: matches meeting title OR an attendee email
+  type?: string       // meeting_type filter
+  dateFrom?: string   // 'YYYY-MM-DD' inclusive lower bound
+  dateTo?: string     // 'YYYY-MM-DD' inclusive upper bound (whole day)
+  limit?: number      // page size (default 60, capped at 200)
+  offset?: number     // page offset
 }
 
-export async function getMeetings({ repEmail }: GetMeetingsOptions = {}): Promise<Meeting[]> {
-  const { rows } = await pool.query<Meeting>(
+export interface MeetingsPage {
+  meetings: Meeting[]
+  total: number       // total matching the filters, across all pages
+}
+
+/**
+ * Search + paginate meetings server-side. The backfill put ~7k meetings in the
+ * table, so filtering has to happen in SQL — the old client-side filter only saw
+ * the first page and couldn't find anything beyond it. `count(*) OVER()` returns
+ * the full match count (pre-LIMIT) so the UI can paginate.
+ */
+export async function getMeetings(opts: GetMeetingsOptions = {}): Promise<MeetingsPage> {
+  const { repEmail, type, dateFrom, dateTo } = opts
+  const limit = Math.min(Math.max(opts.limit ?? 60, 1), 200)
+  const offset = Math.max(opts.offset ?? 0, 0)
+  const like = opts.q && opts.q.trim() ? `%${opts.q.trim()}%` : null
+
+  const { rows } = await pool.query(
     `
     SELECT
       m.id,
@@ -64,18 +86,33 @@ export async function getMeetings({ repEmail }: GetMeetingsOptions = {}): Promis
       COALESCE(
         array_agg(mc.email ORDER BY mc.email) FILTER (WHERE mc.email IS NOT NULL),
         '{}'
-      ) AS attendees
+      ) AS attendees,
+      count(*) OVER() AS total_count
     FROM meetings m
     LEFT JOIN meeting_contacts mc ON mc.meeting_id = m.id
     WHERE m.status IN ('complete', 'pending_synthesis', 'no_show', 'legacy')
       AND ($1::text IS NULL OR m.recording_owner = $1)
+      AND ($2::text IS NULL OR m.meeting_type = $2)
+      AND ($3::date IS NULL OR m.meeting_datetime >= $3::date)
+      AND ($4::date IS NULL OR m.meeting_datetime < ($4::date + INTERVAL '1 day'))
+      AND ($5::text IS NULL
+           OR m.meeting_name ILIKE $5
+           OR EXISTS (SELECT 1 FROM meeting_contacts mc2
+                      WHERE mc2.meeting_id = m.id AND mc2.email ILIKE $5))
     GROUP BY m.id
     ORDER BY m.meeting_datetime DESC NULLS LAST
-    LIMIT 200
+    LIMIT $6 OFFSET $7
     `,
-    [repEmail ?? null]
+    [repEmail ?? null, type ?? null, dateFrom ?? null, dateTo ?? null, like, limit, offset]
   )
-  return rows
+
+  const total = rows.length ? Number(rows[0].total_count) : 0
+  const meetings: Meeting[] = rows.map((r) => {
+    const m = { ...r }
+    delete m.total_count   // window-count helper column, not part of Meeting
+    return m as Meeting
+  })
+  return { meetings, total }
 }
 
 export async function getMeetingById(id: string): Promise<MeetingDetail | null> {
