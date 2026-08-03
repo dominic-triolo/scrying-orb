@@ -377,6 +377,16 @@ function processNewTranscripts() {
             record.recordingOwner = recording.getOwner().getEmail();
           }
           Logger.log(`Recording file ID: ${record.recordingFileId}`);
+
+          // Share the recording with the whole org so it's viewable in the orb UI
+          // (the meeting detail page embeds it via drive.google.com/file/d/<id>/preview).
+          try {
+            recording.setSharing(DriveApp.Access.DOMAIN, DriveApp.Permission.VIEW);
+            Logger.log(`Shared recording with domain: "${recording.getName()}"`);
+          } catch (shareErr) {
+            // meetingbot may only have view access — log and continue
+            Logger.log(`Could not share recording (insufficient permissions?): ${shareErr.message}`);
+          }
         } else {
           record.notes = (record.notes ? record.notes + ' | ' : '') + 'Recording not found';
           Logger.log(`No recording match for: "${meetingName}"`);
