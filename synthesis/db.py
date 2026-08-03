@@ -124,7 +124,8 @@ class DBClient:
         sql = """
             SELECT id, pairing_key, meeting_name, meeting_datetime,
                    meeting_type, meeting_type_source, meeting_outcome,
-                   transcript_text, recording_owner, hubspot_deal_id
+                   transcript_text, recording_owner, hubspot_deal_id,
+                   import_source
             FROM meetings
             WHERE status = 'pending_synthesis'
               AND transcript_text IS NOT NULL

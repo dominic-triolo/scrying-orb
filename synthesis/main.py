@@ -219,6 +219,12 @@ def resynthesize_meeting(
         logger.error(f"Re-synthesis error for {meeting_id}: {err}", exc_info=True)
         return
 
+    # Imported (legacy) meetings are historical and must never enter the nurture
+    # pipeline — even if a rep edits their type, which routes them through here.
+    if meeting.get("import_source") == "attention":
+        logger.info(f"Skipping nurture emit for imported meeting {meeting_id}")
+        return
+
     # Propagate the corrected meeting to nurture (best-effort; _emit never raises).
     dt = meeting.get("meeting_datetime")
     emit_row = {
