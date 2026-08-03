@@ -1,58 +1,80 @@
 'use client'
 
-import { useEffect, useState, useMemo } from 'react'
-import { useSession } from 'next-auth/react'
+import { useEffect, useState, useCallback } from 'react'
 import Sidebar from '@/components/Sidebar'
 import MeetingCard from '@/components/MeetingCard'
 import type { Meeting } from '@/lib/db'
 
-export default function HomePage() {
-  const { data: session } = useSession()
-  const [meetings, setMeetings] = useState<Meeting[]>([])
-  const [loading, setLoading] = useState(true)
+const PAGE_SIZE = 60
 
-  // Filter state
+interface MeetingsResponse {
+  meetings: Meeting[]
+  total: number
+}
+
+export default function HomePage() {
+  const [meetings, setMeetings] = useState<Meeting[]>([])
+  const [total, setTotal] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+
+  // Filter state (server-backed — the table has ~7k rows, so filtering is done in SQL)
   const [search, setSearch] = useState('')
   const [typeFilter, setTypeFilter] = useState('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [showMyMeetings, setShowMyMeetings] = useState(false)
-
-  // Detect leadership client-side from the meeting list
-  // (leadership see other reps' meetings; reps only see their own)
-  const userEmail = session?.user?.email ?? ''
   const [isLeadership, setIsLeadership] = useState(false)
 
   useEffect(() => {
-    fetch('/api/meetings')
+    fetch('/api/me')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (d?.isLeadership) setIsLeadership(true) })
+      .catch(() => {})
+  }, [])
+
+  const buildQuery = useCallback((offset: number) => {
+    const p = new URLSearchParams()
+    if (search.trim()) p.set('q', search.trim())
+    if (typeFilter) p.set('type', typeFilter)
+    if (dateFrom) p.set('from', dateFrom)
+    if (dateTo) p.set('to', dateTo)
+    if (showMyMeetings) p.set('mine', '1')
+    p.set('limit', String(PAGE_SIZE))
+    p.set('offset', String(offset))
+    return p.toString()
+  }, [search, typeFilter, dateFrom, dateTo, showMyMeetings])
+
+  // Reload the first page whenever a filter changes (debounced so typing in the
+  // search box doesn't fire a request per keystroke). Old results stay visible
+  // during the debounce; the skeleton only shows once a fetch actually starts.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setLoading(true)
+      fetch(`/api/meetings?${buildQuery(0)}`)
+        .then((r) => r.json())
+        .then((data: MeetingsResponse) => {
+          setMeetings(data.meetings ?? [])
+          setTotal(data.total ?? 0)
+        })
+        .catch(() => { setMeetings([]); setTotal(0) })
+        .finally(() => setLoading(false))
+    }, 300)
+    return () => clearTimeout(t)
+  }, [buildQuery])
+
+  function loadMore() {
+    setLoadingMore(true)
+    fetch(`/api/meetings?${buildQuery(meetings.length)}`)
       .then((r) => r.json())
-      .then((data: Meeting[]) => {
-        setMeetings(data)
-        // If we can see meetings owned by other reps, we're leadership
-        const ownsOthers = data.some((m) => m.recording_owner !== userEmail)
-        setIsLeadership(ownsOthers)
+      .then((data: MeetingsResponse) => {
+        setMeetings((prev) => [...prev, ...(data.meetings ?? [])])
+        setTotal(data.total ?? 0)
       })
-      .finally(() => setLoading(false))
-  }, [userEmail])
+      .finally(() => setLoadingMore(false))
+  }
 
-  const filtered = useMemo(() => {
-    const q = search.toLowerCase()
-    const from = dateFrom ? new Date(dateFrom) : null
-    const to = dateTo ? new Date(dateTo + 'T23:59:59') : null
-
-    return meetings.filter((m) => {
-      if (typeFilter && m.meeting_type !== typeFilter) return false
-      if (showMyMeetings && m.recording_owner !== userEmail) return false
-      if (from && m.meeting_datetime && new Date(m.meeting_datetime) < from) return false
-      if (to && m.meeting_datetime && new Date(m.meeting_datetime) > to) return false
-      if (q) {
-        const inTitle = m.meeting_name.toLowerCase().includes(q)
-        const inAttendees = m.attendees.some((a) => a.toLowerCase().includes(q))
-        if (!inTitle && !inAttendees) return false
-      }
-      return true
-    })
-  }, [meetings, search, typeFilter, dateFrom, dateTo, showMyMeetings, userEmail])
+  const hasMore = meetings.length < total
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -70,7 +92,11 @@ export default function HomePage() {
           <div>
             <h1 className="text-xl font-bold text-gray-900">Meetings</h1>
             <p className="text-sm text-gray-500 mt-0.5">
-              {loading ? 'Loading…' : `${filtered.length} meeting${filtered.length !== 1 ? 's' : ''}`}
+              {loading
+                ? 'Loading…'
+                : total === 0
+                ? 'No meetings'
+                : `Showing ${meetings.length} of ${total.toLocaleString()} meeting${total !== 1 ? 's' : ''}`}
             </p>
           </div>
         </div>
@@ -81,16 +107,29 @@ export default function HomePage() {
               <div key={i} className="rounded-xl border border-gray-200 bg-white p-5 h-40 animate-pulse" />
             ))}
           </div>
-        ) : filtered.length === 0 ? (
+        ) : meetings.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-24 text-center">
             <p className="text-gray-400 text-sm">No meetings match your filters.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filtered.map((m) => (
-              <MeetingCard key={m.id} meeting={m} />
-            ))}
-          </div>
+          <>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {meetings.map((m) => (
+                <MeetingCard key={m.id} meeting={m} />
+              ))}
+            </div>
+            {hasMore && (
+              <div className="flex justify-center mt-8">
+                <button
+                  onClick={loadMore}
+                  disabled={loadingMore}
+                  className="rounded-md border border-gray-300 bg-white px-5 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                >
+                  {loadingMore ? 'Loading…' : `Load more (${(total - meetings.length).toLocaleString()} more)`}
+                </button>
+              </div>
+            )}
+          </>
         )}
       </main>
     </div>
