@@ -459,6 +459,114 @@ function installTrigger() {
 }
 
 // ---------------------------------------------------------------------------
+// One-off backfill — recover transcripts the mover missed
+// ---------------------------------------------------------------------------
+//
+// processNewTranscripts only looks at files created in the last LOOKBACK_MINUTES.
+// Any transcript that aged past that window before being processed (e.g. every
+// meeting dropped while the mover was keyed to the old '- Notes by Gemini' suffix)
+// is invisible to it forever. This scans ALL transcript candidates in the shared
+// folders, ignoring the lookback, and logs any not already in the sheet.
+//
+// Safe + idempotent: dedupes on pairing_key (normalized so old rows that kept a
+// timezone token still match). Re-run until it logs 0 — Apps Script's ~6-min limit
+// means a large backfill needs several passes; each pass skips what's already done.
+//
+// BACKFILL_SINCE bounds it to the affected period so you don't resurrect ancient
+// meetings into nurture. Set it to the earliest meeting date you want to recover.
+
+const BACKFILL_SINCE = '2026-07-01';   // YYYY-MM-DD — adjust before running
+
+/** Normalize a pairing key to the timezone-less form the current parser produces,
+ *  so keys logged by the old (suffix-based) mover still dedupe. */
+function normalizePairingKey(k) {
+  const m = String(k).match(/^(.+?\d{4}\/\d{2}\/\d{2}(?:\s+\d{2}:\d{2})?)/);
+  return m ? m[1].trim() : String(k);
+}
+
+function backfillAllTranscripts() {
+  const sheet = SpreadsheetApp.openById(CONFIG.LOG_SHEET_ID).getSheetByName(CONFIG.LOG_SHEET_TAB);
+  ensureSheetHeaders(sheet);
+
+  // Pre-load every existing pairing_key ONCE (column D), normalized — far faster
+  // than re-scanning the sheet per file, and tolerant of the old key format.
+  const lastRow = sheet.getLastRow();
+  const done = new Set(
+    (lastRow > 1 ? sheet.getRange(2, 4, lastRow - 1, 1).getValues() : [])
+      .map(r => normalizePairingKey(r[0])).filter(Boolean)
+  );
+
+  const since = new Date(`${BACKFILL_SINCE}T00:00:00`);
+  const start = Date.now();
+  const MAX_MS = 5 * 60 * 1000;   // stop before the 6-min limit; re-run to continue
+  let logged = 0, skipped = 0, tooOld = 0, timedOut = false;
+
+  for (const folder of getSharedFolders()) {
+    const owner = folder.getOwner() ? folder.getOwner().getEmail() : null;
+    const recordingByKey = {};
+    const transcripts = [];
+    const it = folder.getFiles();
+    while (it.hasNext()) {
+      const f = it.next();
+      const key = extractPairingKey(f.getName());
+      if (!key) continue;
+      if (isRecordingCandidate(f)) recordingByKey[key] = f;
+      else if (isTranscriptCandidate(f)) transcripts.push({ f, key });
+    }
+
+    for (const { f, key } of transcripts) {
+      if (done.has(key)) { skipped++; continue; }
+      const mDate = parseMeetingDate(key);
+      if (mDate && mDate < since) { tooOld++; continue; }
+      if (Date.now() - start > MAX_MS) { timedOut = true; break; }
+
+      const meetingName = parseMeetingName(key);
+      const record = {
+        processedAt: new Date().toISOString(), meetingName,
+        meetingDatetime: parseMeetingDatetime(key), pairingKey: key,
+        transcriptCopyId: null, recordingFileId: null, recordingOwner: owner,
+        externalAttendees: null, status: 'pending_synthesis', notes: 'backfill',
+      };
+      try {
+        const cal = findCalendarEvent(meetingName, mDate);
+        if (cal) {
+          const ext = getExternalAttendees(cal);
+          if (ext.length === 0) {
+            record.status = 'skipped_internal';
+            record.notes = 'No external attendees — skipped';
+            logRecord(sheet, record); done.add(key); continue;
+          }
+          record.externalAttendees = ext.join(', ');
+        } else {
+          record.notes = 'Calendar event not found — external attendees unverified';
+        }
+        record.transcriptCopyId = copyToSharedDrive(f);
+        const rec = recordingByKey[key];
+        if (rec) {
+          record.recordingFileId = rec.getId();
+          if (rec.getOwner()) record.recordingOwner = rec.getOwner().getEmail();
+          try { rec.setSharing(DriveApp.Access.DOMAIN, DriveApp.Permission.VIEW); }
+          catch (e) { /* view-only access — leave unshared */ }
+        } else {
+          record.notes = (record.notes ? record.notes + ' | ' : '') + 'Recording not found';
+        }
+      } catch (err) {
+        record.status = 'error';
+        record.notes = err.message;
+      }
+      logRecord(sheet, record);
+      done.add(key);
+      logged++;
+    }
+    if (timedOut) break;
+  }
+
+  Logger.log('Backfill: %s logged, %s already-present, %s before %s%s',
+             logged, skipped, tooOld, BACKFILL_SINCE,
+             timedOut ? ' — TIME LIMIT hit, run again to continue' : ' — DONE');
+}
+
+// ---------------------------------------------------------------------------
 // SETUP NOTES — Calendar access
 // ---------------------------------------------------------------------------
 //
