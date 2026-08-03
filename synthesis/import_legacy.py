@@ -27,6 +27,7 @@ import csv
 import glob
 import logging
 import os
+import re
 import sys
 from datetime import datetime, timezone
 
@@ -46,19 +47,22 @@ INSERT_MEETING = """
     INSERT INTO meetings (
         pairing_key, meeting_name, meeting_datetime, recording_owner,
         hubspot_deal_id, meeting_type, meeting_type_source, transcript_text,
-        status, import_source, processed_at
+        recording_file_id, status, import_source, processed_at
     ) VALUES (
         %(pairing_key)s, %(meeting_name)s, %(meeting_datetime)s, %(recording_owner)s,
         %(hubspot_deal_id)s, %(meeting_type)s, %(meeting_type_source)s, %(transcript_text)s,
-        'legacy', 'attention', %(processed_at)s
+        %(recording_file_id)s, 'legacy', 'attention', %(processed_at)s
     )
     ON CONFLICT (pairing_key) DO UPDATE SET
-        meeting_name     = EXCLUDED.meeting_name,
-        meeting_datetime = EXCLUDED.meeting_datetime,
-        recording_owner  = EXCLUDED.recording_owner,
-        hubspot_deal_id  = COALESCE(EXCLUDED.hubspot_deal_id, meetings.hubspot_deal_id),
-        transcript_text  = EXCLUDED.transcript_text,
-        import_source    = EXCLUDED.import_source
+        meeting_name      = EXCLUDED.meeting_name,
+        meeting_datetime  = EXCLUDED.meeting_datetime,
+        recording_owner   = EXCLUDED.recording_owner,
+        hubspot_deal_id   = COALESCE(EXCLUDED.hubspot_deal_id, meetings.hubspot_deal_id),
+        transcript_text   = EXCLUDED.transcript_text,
+        -- link recordings on a later re-import once the Drive uploads land; never
+        -- null out a link we already have if a later export omits it.
+        recording_file_id = COALESCE(EXCLUDED.recording_file_id, meetings.recording_file_id),
+        import_source     = EXCLUDED.import_source
         -- deliberately NOT touching status / synthesis_output / synthesized_at /
         -- meeting_type: a re-run must never wipe an analysis a rep already ran.
     RETURNING id
@@ -89,6 +93,26 @@ def _parse_dt(value: str):
         return None
 
 
+_DRIVE_ID = re.compile(r"/d/([A-Za-z0-9_-]+)|[?&]id=([A-Za-z0-9_-]+)")
+
+
+def _drive_file_id(link: str) -> str | None:
+    """Pull the Drive file id out of a share link. Handles the common shapes:
+      https://drive.google.com/file/d/<id>/view
+      https://drive.google.com/open?id=<id>
+    A bare id (no URL) is used as-is. Returns None if nothing usable is found."""
+    link = (link or "").strip()
+    if not link:
+        return None
+    m = _DRIVE_ID.search(link)
+    if m:
+        return m.group(1) or m.group(2)
+    # bare id (no slashes / scheme)
+    if "/" not in link and re.fullmatch(r"[A-Za-z0-9_-]+", link):
+        return link
+    return None
+
+
 def _pair_contacts(emails: list[str], contact_ids: list[str]) -> list[tuple]:
     """Pair emails with hubspot contact ids positionally, but only when the counts
     line up 1:1 — otherwise we can't trust the pairing, so keep the emails and drop
@@ -115,6 +139,7 @@ def import_row(cur, row: dict) -> str | None:
         "meeting_type":       meeting_type,
         "meeting_type_source": source,
         "transcript_text":    (row.get("transcript") or "").strip() or None,
+        "recording_file_id":  _drive_file_id(row.get("recording_drive_link", "")),
         "processed_at":       datetime.now(timezone.utc),
     })
     meeting_id = cur.fetchone()[0]
