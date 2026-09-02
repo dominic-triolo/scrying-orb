@@ -139,3 +139,53 @@ class GeminiClient:
                     time.sleep(2)  # brief pause before retry
 
         raise ValueError(f"Gemini JSON parsing failed after {max_retries} attempts") from last_error
+
+    def generate_json(
+        self, system_instruction: str, user_content: str, max_retries: int = 3
+    ) -> dict:
+        """Free-form JSON generation (not tied to a meeting-type prompt file).
+
+        Used by the cross-transcript analysis worker for its plan / map / reduce
+        steps. Retries on API errors (429/503/transport) and on JSON parse
+        failures, backing off between attempts.
+        """
+        client = genai.Client(api_key=self._api_key)
+        last_error: Exception | None = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                response = client.models.generate_content(
+                    model=self._model_name,
+                    contents=user_content,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_instruction,
+                        response_mime_type="application/json",
+                    ),
+                )
+                return _extract_json(response.text)
+            except Exception as e:  # API error or JSON parse failure
+                last_error = e
+                logger.warning(f"generate_json attempt {attempt}/{max_retries} failed: {e}")
+                if attempt < max_retries:
+                    time.sleep(2 * attempt)
+        raise ValueError(f"generate_json failed after {max_retries} attempts") from last_error
+
+    def generate_text(
+        self, system_instruction: str, user_content: str, max_retries: int = 3
+    ) -> str:
+        """Free-form text generation (no JSON). Used for the analysis chat follow-ups."""
+        client = genai.Client(api_key=self._api_key)
+        last_error: Exception | None = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                response = client.models.generate_content(
+                    model=self._model_name,
+                    contents=user_content,
+                    config=types.GenerateContentConfig(system_instruction=system_instruction),
+                )
+                return (response.text or "").strip()
+            except Exception as e:
+                last_error = e
+                logger.warning(f"generate_text attempt {attempt}/{max_retries} failed: {e}")
+                if attempt < max_retries:
+                    time.sleep(2 * attempt)
+        raise RuntimeError(f"generate_text failed after {max_retries} attempts") from last_error

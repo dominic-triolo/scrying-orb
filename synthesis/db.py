@@ -241,3 +241,157 @@ class DBClient:
                 conn.commit()
 
         logger.info(f"Upserted {len(contacts)} contact(s) for meeting {meeting_id}")
+
+    # ── Cross-transcript analysis (migration 010) ───────────────────────────
+    #
+    # The analyzable set is: transcript stored AND the call actually happened.
+    # Kept identical to the web /estimate count so the "N transcripts" the user
+    # confirms is exactly what the worker processes.
+    _ANALYZABLE_WHERE = (
+        "transcript_text IS NOT NULL AND status IN ('complete', 'legacy')"
+    )
+
+    def claim_next_analysis_job(self) -> dict | None:
+        """Atomically claim one queued analysis job (running + started_at).
+
+        FOR UPDATE SKIP LOCKED makes this safe even if more than one worker ever
+        runs. Returns the job dict, or None when the queue is empty.
+        """
+        sql = f"""
+            UPDATE analysis_jobs SET status = 'running', started_at = NOW()
+            WHERE id = (
+                SELECT id FROM analysis_jobs
+                WHERE status = 'queued'
+                ORDER BY created_at ASC
+                LIMIT 1
+                FOR UPDATE SKIP LOCKED
+            )
+            RETURNING id, query, filters, total_transcripts, processed_count
+        """
+        with self._connect() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(sql)
+                row = cur.fetchone()
+                conn.commit()
+                return dict(row) if row else None
+
+    def fetch_analysis_meetings(self, filters: dict) -> list[dict]:
+        """Meetings matching the job's filters that have an analyzable transcript.
+
+        filters: {meeting_types: [...], reps: [...], date_from, date_to} — any
+        empty/absent list or null bound is treated as "no filter" for that field.
+        """
+        types = filters.get("meeting_types") or None
+        reps = filters.get("reps") or None
+        date_from = filters.get("date_from") or None
+        date_to = filters.get("date_to") or None
+        sql = f"""
+            SELECT id, meeting_name, meeting_datetime, recording_owner,
+                   meeting_type, transcript_text
+            FROM meetings
+            WHERE {self._ANALYZABLE_WHERE}
+              AND (%(types)s::text[]  IS NULL OR meeting_type    = ANY(%(types)s))
+              AND (%(reps)s::text[]   IS NULL OR recording_owner = ANY(%(reps)s))
+              AND (%(date_from)s::date IS NULL OR meeting_datetime >= %(date_from)s::date)
+              AND (%(date_to)s::date   IS NULL OR meeting_datetime <  (%(date_to)s::date + INTERVAL '1 day'))
+            ORDER BY meeting_datetime ASC NULLS LAST
+        """
+        params = {"types": types, "reps": reps, "date_from": date_from, "date_to": date_to}
+        with self._connect() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(sql, params)
+                return [dict(r) for r in cur.fetchall()]
+
+    def analysis_done_meeting_ids(self, job_id: str) -> set[str]:
+        """meeting_ids already mapped for this job (resume after a crash/restart)."""
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT meeting_id FROM analysis_findings WHERE job_id = %s", (job_id,)
+                )
+                return {str(r[0]) for r in cur.fetchall()}
+
+    def save_analysis_finding(
+        self, job_id: str, meeting_id: str, findings: dict, error: str | None = None
+    ) -> None:
+        """Upsert one transcript's map output (idempotent on job_id + meeting_id)."""
+        sql = """
+            INSERT INTO analysis_findings (job_id, meeting_id, findings, error)
+            VALUES (%(job_id)s, %(meeting_id)s, %(findings)s, %(error)s)
+            ON CONFLICT (job_id, meeting_id) DO UPDATE SET
+                findings = EXCLUDED.findings,
+                error    = EXCLUDED.error
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, {
+                    "job_id": job_id,
+                    "meeting_id": meeting_id,
+                    "findings": psycopg2.extras.Json(findings),
+                    "error": error,
+                })
+                conn.commit()
+
+    def bump_analysis_progress(self, job_id: str, delta: int = 1) -> None:
+        """Atomically advance processed_count (map threads increment concurrently)."""
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE analysis_jobs SET processed_count = processed_count + %s WHERE id = %s",
+                    (delta, job_id),
+                )
+                conn.commit()
+
+    def set_analysis_totals(self, job_id: str, total: int, processed: int) -> None:
+        """Set the matched-transcript total and reset processed to the resume point."""
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE analysis_jobs SET total_transcripts = %s, processed_count = %s WHERE id = %s",
+                    (total, processed, job_id),
+                )
+                conn.commit()
+
+    def analysis_job_status(self, job_id: str) -> str | None:
+        """Current status — the worker polls this to honor a mid-run cancel."""
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT status FROM analysis_jobs WHERE id = %s", (job_id,))
+                row = cur.fetchone()
+                return row[0] if row else None
+
+    def get_analysis_findings(self, job_id: str) -> list[dict]:
+        """All map outputs for the reduce/aggregate step, joined to meeting meta."""
+        sql = """
+            SELECT f.findings, f.error, m.recording_owner, m.meeting_name, m.meeting_datetime
+            FROM analysis_findings f
+            JOIN meetings m ON m.id = f.meeting_id
+            WHERE f.job_id = %s
+            ORDER BY m.meeting_datetime ASC NULLS LAST
+        """
+        with self._connect() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(sql, (job_id,))
+                return [dict(r) for r in cur.fetchall()]
+
+    def finish_analysis_job(
+        self, job_id: str, status: str, result: dict | None = None, error: str | None = None
+    ) -> None:
+        """Terminal write: complete / error / canceled, with result or error."""
+        sql = """
+            UPDATE analysis_jobs SET
+                status      = %(status)s,
+                result      = COALESCE(%(result)s, result),
+                error       = %(error)s,
+                finished_at = NOW()
+            WHERE id = %(id)s
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, {
+                    "id": job_id,
+                    "status": status,
+                    "result": psycopg2.extras.Json(result) if result is not None else None,
+                    "error": error,
+                })
+                conn.commit()
