@@ -1,4 +1,5 @@
 import type { NextAuthOptions } from 'next-auth'
+import { getServerSession } from 'next-auth'
 import GoogleProvider from 'next-auth/providers/google'
 
 export const authOptions: NextAuthOptions = {
@@ -76,4 +77,16 @@ export function isLeadership(email: string): boolean {
     .map((e) => e.trim().toLowerCase())
     .filter(Boolean)
   return leaders.includes(email.toLowerCase())
+}
+
+/**
+ * Server-side guard for leadership-only API routes. Returns the caller's email
+ * when they are signed in AND in LEADERSHIP_EMAILS, otherwise null (the route
+ * should respond 401/403). Used by every /api/analysis route + /api/reps.
+ */
+export async function requireLeadership(): Promise<string | null> {
+  const session = await getServerSession(authOptions)
+  const email = session?.user?.email
+  if (!email || !isLeadership(email)) return null
+  return email
 }
