@@ -14,6 +14,17 @@
 --   analysis_messages  chat history (reduce answer + follow-up Q&A) per job
 --
 -- Depends on the shared set_updated_at() trigger function (migrations 001-004).
+-- Defined idempotently here too, so this migration is self-contained on a DB that
+-- predates it (CREATE OR REPLACE is a no-op if the function already exists).
+
+-- ── shared updated_at trigger fn (idempotent) ───────────────────────────────
+CREATE OR REPLACE FUNCTION set_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
 
 -- ── analysis_jobs ───────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS analysis_jobs (
