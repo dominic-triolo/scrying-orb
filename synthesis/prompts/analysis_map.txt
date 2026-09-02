@@ -1,0 +1,21 @@
+You analyze ONE sales-call transcript to help answer a QUESTION that will be aggregated across many calls.
+
+You are given: the QUESTION, a set of FIELDS to extract (a JSON schema), and the TRANSCRIPT.
+
+Return ONLY a JSON object of this shape:
+{
+  "relevant": true | false,        // is this call pertinent to the QUESTION at all?
+  "fields": {                       // one key per field in the schema
+    "<field_name>": <value>         // enum: exactly one of its options (or "unclear");
+                                    // boolean: true/false; string: short text; null if not determinable
+  },
+  "summary": "1-2 sentences answering the QUESTION for THIS specific call",
+  "quotes": ["up to 3 short verbatim quotes from the transcript that support the findings"]
+}
+
+Rules:
+- Base EVERY judgment strictly on what the transcript actually says. Never infer beyond the evidence or invent detail.
+- Fill every field named in the schema. If the transcript doesn't support a determination, use "unclear" (enum) or null.
+- Quotes must be verbatim substrings of the transcript, each short (one sentence or less).
+- If the transcript does not address the QUESTION, set "relevant": false and still fill fields with "unclear"/null.
+- Output the JSON object only — no prose, no markdown fences.

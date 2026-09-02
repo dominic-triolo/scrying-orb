@@ -474,3 +474,159 @@ export async function updateMeetingType(
     [id, meetingType]
   )
 }
+
+// ── Cross-transcript analysis (migration 010) ───────────────────────────────
+
+export interface AnalysisFilters {
+  meeting_types: string[]
+  reps: string[]
+  date_from: string | null
+  date_to: string | null
+}
+
+export interface AnalysisJob {
+  id: string
+  created_by: string
+  query: string
+  filters: AnalysisFilters
+  status: 'queued' | 'running' | 'complete' | 'error' | 'canceled'
+  total_transcripts: number
+  processed_count: number
+  result: Record<string, unknown> | null
+  error: string | null
+  created_at: string
+  started_at: string | null
+  finished_at: string | null
+}
+
+export interface AnalysisMessage {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  created_at: string
+}
+
+// The analyzable set: a stored transcript for a call that actually happened.
+// MUST stay identical to synthesis/db.py:_ANALYZABLE_WHERE so the estimated
+// count the user confirms equals what the worker processes.
+const ANALYZABLE = `transcript_text IS NOT NULL AND status IN ('complete', 'legacy')`
+
+// $1 meeting_types[], $2 reps[], $3 date_from, $4 date_to — null ⇒ no filter.
+const FILTER_WHERE = `
+  AND ($1::text[] IS NULL OR meeting_type    = ANY($1))
+  AND ($2::text[] IS NULL OR recording_owner = ANY($2))
+  AND ($3::date   IS NULL OR meeting_datetime >= $3::date)
+  AND ($4::date   IS NULL OR meeting_datetime <  ($4::date + INTERVAL '1 day'))
+`
+
+function filterParams(f: AnalysisFilters) {
+  return [
+    f.meeting_types.length ? f.meeting_types : null,
+    f.reps.length ? f.reps : null,
+    f.date_from || null,
+    f.date_to || null,
+  ]
+}
+
+/** Distinct reps (recording_owner) that have at least one analyzable transcript. */
+export async function listAnalysisReps(): Promise<string[]> {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT recording_owner FROM meetings
+     WHERE recording_owner IS NOT NULL AND ${ANALYZABLE}
+     ORDER BY recording_owner`
+  )
+  return rows.map((r) => r.recording_owner)
+}
+
+/** How many transcripts match these filters (the estimate + the run size). */
+export async function countAnalyzableTranscripts(f: AnalysisFilters): Promise<number> {
+  const { rows } = await pool.query(
+    `SELECT count(*)::int AS n FROM meetings WHERE ${ANALYZABLE} ${FILTER_WHERE}`,
+    filterParams(f)
+  )
+  return rows[0]?.n ?? 0
+}
+
+export async function createAnalysisJob(
+  createdBy: string,
+  query: string,
+  filters: AnalysisFilters,
+  total: number
+): Promise<string> {
+  const { rows } = await pool.query(
+    `INSERT INTO analysis_jobs (created_by, query, filters, total_transcripts)
+     VALUES ($1, $2, $3, $4) RETURNING id`,
+    [createdBy, query, JSON.stringify(filters), total]
+  )
+  return rows[0].id
+}
+
+const JOB_COLUMNS = `id, created_by, query, filters, status, total_transcripts,
+  processed_count, result, error, created_at, started_at, finished_at`
+
+export async function getAnalysisJob(id: string): Promise<AnalysisJob | null> {
+  const { rows } = await pool.query(
+    `SELECT ${JOB_COLUMNS} FROM analysis_jobs WHERE id = $1`,
+    [id]
+  )
+  return rows[0] ?? null
+}
+
+export async function listAnalysisJobs(limit = 25): Promise<AnalysisJob[]> {
+  const { rows } = await pool.query(
+    `SELECT ${JOB_COLUMNS} FROM analysis_jobs ORDER BY created_at DESC LIMIT $1`,
+    [limit]
+  )
+  return rows
+}
+
+/** Flip a queued/running job to canceled. Returns false if it was already terminal. */
+export async function cancelAnalysisJob(id: string): Promise<boolean> {
+  const { rowCount } = await pool.query(
+    `UPDATE analysis_jobs SET status = 'canceled', finished_at = NOW()
+     WHERE id = $1 AND status IN ('queued', 'running')`,
+    [id]
+  )
+  return (rowCount ?? 0) > 0
+}
+
+export async function getAnalysisMessages(jobId: string): Promise<AnalysisMessage[]> {
+  const { rows } = await pool.query(
+    `SELECT id, role, content, created_at FROM analysis_messages
+     WHERE job_id = $1 ORDER BY created_at ASC`,
+    [jobId]
+  )
+  return rows
+}
+
+export async function addAnalysisMessage(
+  jobId: string,
+  role: 'user' | 'assistant',
+  content: string
+): Promise<void> {
+  await pool.query(
+    `INSERT INTO analysis_messages (job_id, role, content) VALUES ($1, $2, $3)`,
+    [jobId, role, content]
+  )
+}
+
+export interface FindingSample {
+  recording_owner: string | null
+  meeting_name: string
+  findings: Record<string, unknown>
+}
+
+/** A bounded sample of per-transcript findings, for grounding the chat follow-ups. */
+export async function getAnalysisFindingSample(
+  jobId: string,
+  limit = 60
+): Promise<FindingSample[]> {
+  const { rows } = await pool.query(
+    `SELECT m.recording_owner, m.meeting_name, f.findings
+     FROM analysis_findings f JOIN meetings m ON m.id = f.meeting_id
+     WHERE f.job_id = $1 AND f.error IS NULL
+     LIMIT $2`,
+    [jobId, limit]
+  )
+  return rows
+}

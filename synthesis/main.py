@@ -11,6 +11,7 @@ Entry point for the Railway worker process.
 import logging
 import time
 
+from analysis import start_analysis_worker
 from config import Config
 from db import DBClient
 from nurture_emit import emit_meeting_processed
@@ -259,6 +260,10 @@ def run() -> None:
     db         = DBClient(config)
 
     logger.info(f"Polling every {config.poll_interval_seconds}s")
+
+    # Cross-transcript analysis runs on its own faster poll loop (daemon thread)
+    # so a submitted analysis starts promptly instead of waiting on the 5-min tick.
+    start_analysis_worker(config)
 
     while True:
         try:
