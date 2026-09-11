@@ -199,6 +199,38 @@ function getSharedFolders() {
   return folders;
 }
 
+// Don't descend past this many levels below a shared folder — guards the 6-min
+// Apps Script limit against an unexpectedly deep tree. The Google Meet layout is
+// only one level deep (Google Meet/ → per-meeting subfolder → files).
+const MAX_SUBFOLDER_DEPTH = 3;
+
+/**
+ * Every folder we should scan for transcripts: each folder shared with meetingbot
+ * PLUS its descendant subfolders, deduped by id.
+ *
+ * Google now nests each meeting's transcript + recording in a per-meeting subfolder
+ * under a shared "Google Meet" parent (the parent itself holds no files). The old
+ * "Meet Recordings" layout keeps files directly in the shared folder. Walking
+ * subfolders covers both — and does it off the stable parent share, rather than
+ * relying on each fresh subfolder's inherited share being search-indexed within the
+ * lookback window (which it may not be, silently dropping a just-finished meeting).
+ */
+function getScanFolders() {
+  const seen = {};
+  const out = [];
+  function walk(folder, depth) {
+    const id = folder.getId();
+    if (seen[id]) return;          // dedupe: a subfolder may also be shared directly
+    seen[id] = true;
+    out.push(folder);
+    if (depth >= MAX_SUBFOLDER_DEPTH) return;
+    const subs = folder.getFolders();
+    while (subs.hasNext()) walk(subs.next(), depth + 1);
+  }
+  for (const folder of getSharedFolders()) walk(folder, 0);
+  return out;
+}
+
 /**
  * Returns files created within the lookback window inside a given folder.
  */
@@ -282,8 +314,8 @@ function processNewTranscripts() {
   }
   ensureSheetHeaders(sheet);
 
-  const sharedFolders = getSharedFolders();
-  Logger.log(`Found ${sharedFolders.length} shared folder(s) to scan`);
+  const sharedFolders = getScanFolders();
+  Logger.log(`Found ${sharedFolders.length} folder(s) to scan (shared + subfolders)`);
 
   for (const folder of sharedFolders) {
     const recentFiles = getRecentFiles(folder, lookbackMs);
@@ -501,7 +533,7 @@ function backfillAllTranscripts() {
   const MAX_MS = 5 * 60 * 1000;   // stop before the 6-min limit; re-run to continue
   let logged = 0, skipped = 0, tooOld = 0, timedOut = false;
 
-  for (const folder of getSharedFolders()) {
+  for (const folder of getScanFolders()) {
     const owner = folder.getOwner() ? folder.getOwner().getEmail() : null;
     const recordingByKey = {};
     const transcripts = [];
