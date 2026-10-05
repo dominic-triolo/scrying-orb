@@ -60,14 +60,23 @@ class RecallClient:
 
     # ── bots ────────────────────────────────────────────────────────────────
     def create_bot(self, meeting_url: str, bot_name: str = "TrovaTrip Notetaker",
-                   transcribe: bool = True) -> dict:
+                   transcribe: bool = True, metadata: dict | None = None) -> dict:
         """Send a bot into a live meeting. Returns the bot object (grab `id`).
         Used for the Phase-1 spike; in production bots are auto-deployed by the
-        Recall calendar integration instead."""
+        Recall calendar integration instead. `metadata` (string values) rides
+        on the bot and is how recall_queue learns the meeting name, rep and
+        external attendees — Google Meet itself exposes none of them."""
         payload: dict = {"meeting_url": meeting_url, "bot_name": bot_name}
+        if metadata:
+            payload["metadata"] = metadata
         if transcribe:
             # Recall's built-in transcription provider ($0.15/recording-hour).
-            payload["recording_config"] = {"transcript": {"provider": {"recallai_async": {}}}}
+            # `recallai_async` is only valid on the post-meeting create_transcript
+            # endpoint; at bot creation the same model is `recallai_streaming` in
+            # prioritize_accuracy mode, and the transcript lands on the recording.
+            payload["recording_config"] = {"transcript": {"provider": {
+                "recallai_streaming": {"mode": "prioritize_accuracy",
+                                       "language_code": "auto"}}}}
         resp = requests.post(f"{self.base}/bot", headers=self._headers,
                              json=payload, timeout=_TIMEOUT)
         resp.raise_for_status()

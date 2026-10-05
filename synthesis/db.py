@@ -395,3 +395,26 @@ class DBClient:
                     "error": error,
                 })
                 conn.commit()
+
+    # ── Recall.ai ingest queue (migration 011) ───────────────────────────────
+
+    def get_pending_recall_bots(self) -> list[dict]:
+        """Bots the Recall webhook queued (transcript.done) and nobody processed yet."""
+        sql = """
+            SELECT id, bot_id, created_at
+            FROM recall_pending_meetings
+            WHERE status = 'pending'
+            ORDER BY created_at ASC
+            LIMIT 10
+        """
+        with self._connect() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(sql)
+                return [dict(r) for r in cur.fetchall()]
+
+    def set_recall_pending_status(self, pending_id: str, status: str, notes: str = "") -> None:
+        sql = "UPDATE recall_pending_meetings SET status = %s, notes = %s WHERE id = %s"
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (status, notes or None, pending_id))
+                conn.commit()
