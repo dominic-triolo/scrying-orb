@@ -54,6 +54,10 @@ BOT_NAME = "TrovaTrip Notetaker"
 RECORDING_CONFIG = {"transcript": {"provider": {
     "recallai_streaming": {"mode": "prioritize_accuracy", "language_code": "auto"}}}}
 
+# Recall's default is to leave 2 seconds after the last person does, which ends the
+# recording for good if the only human left drops and reconnects. Wait a minute.
+AUTOMATIC_LEAVE = {"everyone_left_timeout": {"timeout": 60}}
+
 
 class RecallClient:
     """Minimal Recall.ai REST client. Region-scoped base URL, e.g.
@@ -77,7 +81,8 @@ class RecallClient:
         Recall calendar integration instead. `metadata` (string values) rides
         on the bot and is how recall_queue learns the meeting name, rep and
         external attendees — Google Meet itself exposes none of them."""
-        payload: dict = {"meeting_url": meeting_url, "bot_name": bot_name}
+        payload: dict = {"meeting_url": meeting_url, "bot_name": bot_name,
+                         "automatic_leave": AUTOMATIC_LEAVE}
         if metadata:
             payload["metadata"] = metadata
         if transcribe:
