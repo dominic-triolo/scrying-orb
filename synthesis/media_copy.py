@@ -3,14 +3,14 @@ Copy notetaker recordings from Recall.ai into our own bucket.
 
 Once a Recall bot's meeting has been synthesized, this thread streams its video
 (and the raw word-level transcript JSON, which the flattened text in Postgres
-doesn't preserve) from Recall's presigned URLs into our S3-compatible bucket and
+doesn't preserve) from Recall's presigned URLs into our Cloudflare R2 bucket and
 points meetings.recording_key at the video. The meeting page then plays it from
 the bucket through a signed link.
 
 Recall is not asked to delete anything unless MEDIA_DELETE_FROM_RECALL=1, and then
 only after both uploads have been verified by size — deletion there is permanent.
 
-Inert until MEDIA_S3_BUCKET is set.
+Inert until MEDIA_R2_BUCKET is set.
 """
 import logging
 import threading
@@ -39,16 +39,16 @@ def transcript_key(bot_id: str) -> str:
 
 
 class MediaStore:
-    """Thin wrapper over an S3-compatible bucket (R2, S3, Railway)."""
+    """Thin wrapper over our Cloudflare R2 bucket (S3-compatible API)."""
 
     def __init__(self, config: Config):
-        self.bucket = config.media_s3_bucket
+        self.bucket = config.media_r2_bucket
         self._s3 = boto3.client(
             "s3",
-            endpoint_url=config.media_s3_endpoint or None,
-            region_name=config.media_s3_region,
-            aws_access_key_id=config.media_s3_access_key_id,
-            aws_secret_access_key=config.media_s3_secret_access_key,
+            endpoint_url=config.media_r2_endpoint,
+            region_name="auto",          # R2 has no regions; the SDK just needs a value
+            aws_access_key_id=config.media_r2_access_key_id,
+            aws_secret_access_key=config.media_r2_secret_access_key,
         )
 
     def copy_from_url(self, url: str, key: str, content_type: str) -> int:

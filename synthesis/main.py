@@ -272,7 +272,7 @@ def run() -> None:
         # Schedules notetaker bots onto connected reps' calendar events.
         start_calendar_sync_worker(config)
         # Copies finished recordings into our own bucket — inert until one is set.
-        if config.media_s3_bucket:
+        if config.media_r2_bucket:
             start_media_copy_worker(config)
         logger.info("Recall intake enabled")
 

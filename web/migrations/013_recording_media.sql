@@ -3,7 +3,7 @@
 --
 -- After a Recall bot's meeting is synthesized, the worker's media-copy thread
 -- copies the video (and the raw word-level transcript JSON) from Recall into our
--- S3-compatible bucket, then points the meeting at the object.
+-- Cloudflare R2 bucket, then points the meeting at the object.
 --
 -- meetings.recording_key          object key of the video in the bucket; the meeting
 --                                 page plays it through /api/meetings/[id]/recording
