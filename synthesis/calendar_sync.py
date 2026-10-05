@@ -7,8 +7,10 @@ is owed (recall_calendars.sync_from). This module is the worker side: for each o
 calendar it lists the changed events and, per event, schedules or removes the
 notetaker bot.
 
-Recording rule (same as the retired Apps Script mover): a Google Meet event with at
-least one attendee outside @trovatrip.com, that the calendar owner hasn't declined.
+Recording rule: a one-off Google Meet event with at least one attendee outside
+@trovatrip.com, that the calendar owner hasn't declined. Recurring series are never
+recorded — the "external attendee" test alone also matches internal standups and
+all-hands that include someone's personal address, and booked sales calls are one-off.
 
 The bot is scheduled with the metadata recall_queue reads once the call is
 transcribed — meeting_name, recording_owner, external_attendees — which is the only
@@ -56,6 +58,9 @@ def recording_plan(event: dict, calendar_email: str, connected_emails: set[str])
         return None
     # outOfOffice / focusTime / workingLocation blocks are never calls.
     if raw.get("eventType", "default") != "default":
+        return None
+    # Any instance of a recurring series (see module docstring).
+    if raw.get("recurringEventId") or raw.get("recurrence"):
         return None
     if "meet.google.com" not in (event.get("meeting_url") or ""):
         return None
