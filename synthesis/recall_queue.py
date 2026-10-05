@@ -22,6 +22,10 @@ from recall import RecallClient, flatten_transcript
 logger = logging.getLogger(__name__)
 
 _KEY_PREFIX = "recall:"
+# Other companies' recording bots sit in the call as participants; they don't count
+# as someone having shown up.
+_BOT_NAME_HINTS = ("notetaker", "note taker", "recorder", "otter", "fireflies",
+                   "fathom", "read.ai")
 
 
 class RecallQueue:
@@ -36,7 +40,7 @@ class RecallQueue:
             pending_id = str(pending["id"])
             try:
                 bot = self._client.get_bot(pending["bot_id"])
-                rows.append(_row_from_bot(bot, pending_id))
+                rows.append(_row_from_bot(bot, pending_id, self._client.fetch_participants(bot)))
             except Exception as err:
                 logger.error(f"Recall bot {pending['bot_id']} unreadable: {err}")
                 self.mark_error(pending_id, str(err))
@@ -56,18 +60,27 @@ class RecallTranscriptStore:
         self._client = client
 
     def read_transcript(self, transcript_key: str) -> str:
-        """`recall:<bot_id>` → "Speaker Name: text" lines. Raises if the meeting
-        produced no speech, so an empty call lands as an error row rather than an
-        empty synthesis."""
+        """`recall:<bot_id>` → "Speaker Name: text" lines. Empty when nobody spoke
+        (a no-show); process_row refuses to synthesize an empty transcript."""
         bot_id = transcript_key.removeprefix(_KEY_PREFIX)
         transcript = flatten_transcript(self._client.fetch_transcript_segments(bot_id))
-        if not transcript:
-            raise RuntimeError(f"Recall bot {bot_id} transcript is empty")
         logger.info(f"Read Recall transcript {bot_id} ({len(transcript):,} chars)")
         return transcript
 
 
-def _row_from_bot(bot: dict, pending_id: str) -> dict:
+def people_who_joined(participants: list) -> int:
+    """Distinct humans among the participants the bot saw. Counted by display name
+    so someone who drops and rejoins, or is on two devices, is one person."""
+    names = set()
+    for participant in participants:
+        name = (participant.get("name") or "").strip().lower()
+        if any(hint in name for hint in _BOT_NAME_HINTS):
+            continue
+        names.add(name or f"#{participant.get('id')}")
+    return len(names)
+
+
+def _row_from_bot(bot: dict, pending_id: str, participants: list | None = None) -> dict:
     bot_id = bot["id"]
     metadata = bot.get("metadata") or {}
     recording = (bot.get("recordings") or [{}])[0]
@@ -91,4 +104,9 @@ def _row_from_bot(bot: dict, pending_id: str) -> dict:
         "recording_owner":    metadata.get("recording_owner") or "",
         "external_attendees": metadata.get("external_attendees") or "",
         "notes":              "",
+        # Only one person ever in the call ⇒ the other side never came. Synthesis
+        # runs minutes after the call, before a rep has logged an outcome in
+        # HubSpot, so without this a rep waiting alone is synthesized as a real call.
+        # An unknown participant list is never read as a no-show.
+        "inferred_no_show":   participants is not None and people_who_joined(participants) <= 1,
     }
