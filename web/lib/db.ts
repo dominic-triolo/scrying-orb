@@ -33,6 +33,7 @@ export interface Contact {
 
 export interface MeetingDetail extends Meeting {
   recording_file_id: string | null
+  has_recording: boolean      // a notetaker video in our bucket (see /api/meetings/[id]/recording)
   transcript_copy_id: string | null
   synthesis_output: Record<string, unknown> | null
   transcript_text: string | null
@@ -126,6 +127,7 @@ export async function getMeetingById(id: string): Promise<MeetingDetail | null> 
       m.meeting_type_source,
       m.recording_owner,
       m.recording_file_id,
+      (m.recording_key IS NOT NULL) AS has_recording,
       m.transcript_copy_id,
       m.rep_talk_pct,
       m.prospect_talk_pct,
@@ -151,6 +153,17 @@ export async function getMeetingById(id: string): Promise<MeetingDetail | null> 
     WHERE m.id = $1
     GROUP BY m.id
     `,
+    [id]
+  )
+  return rows[0] ?? null
+}
+
+/** Just what the recording route needs: who owns the meeting and where its video is. */
+export async function getMeetingRecording(
+  id: string
+): Promise<{ recording_owner: string | null; recording_key: string | null } | null> {
+  const { rows } = await pool.query(
+    `SELECT recording_owner, recording_key FROM meetings WHERE id = $1`,
     [id]
   )
   return rows[0] ?? null

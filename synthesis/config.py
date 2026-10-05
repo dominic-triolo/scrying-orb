@@ -34,6 +34,16 @@ class Config:
     recall_region: str = "us-west-2"
     recall_webhook_secret: str = ""
 
+    # Our Cloudflare R2 bucket for notetaker recordings. All optional; unset
+    # bucket ⇒ media stays on Recall and nothing is copied.
+    media_r2_bucket: str = ""
+    media_r2_endpoint: str = ""          # https://<account-id>.r2.cloudflarestorage.com
+    media_r2_access_key_id: str = ""
+    media_r2_secret_access_key: str = ""
+    # Delete a bot's media from Recall once our copy is verified. Off by default —
+    # deletion is permanent, so turn it on only after playback from the bucket is proven.
+    media_delete_from_recall: bool = False
+
     @classmethod
     def from_env(cls) -> "Config":
         sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
@@ -55,4 +65,9 @@ class Config:
             recall_api_key=os.environ.get("RECALL_API_KEY", ""),
             recall_region=os.environ.get("RECALL_REGION", "us-west-2"),
             recall_webhook_secret=os.environ.get("RECALL_WEBHOOK_SECRET", ""),
+            media_r2_bucket=os.environ.get("MEDIA_R2_BUCKET", ""),
+            media_r2_endpoint=os.environ.get("MEDIA_R2_ENDPOINT", ""),
+            media_r2_access_key_id=os.environ.get("MEDIA_R2_ACCESS_KEY_ID", ""),
+            media_r2_secret_access_key=os.environ.get("MEDIA_R2_SECRET_ACCESS_KEY", ""),
+            media_delete_from_recall=os.environ.get("MEDIA_DELETE_FROM_RECALL", "") == "1",
         )

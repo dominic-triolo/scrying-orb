@@ -106,6 +106,23 @@ class RecallClient:
                 return url
         return None
 
+    @staticmethod
+    def video_download_url(bot: dict) -> str | None:
+        """Presigned URL of the bot's mixed video (mp4), or None if it recorded none."""
+        for rec in (bot.get("recordings") or []):
+            shortcut = ((rec.get("media_shortcuts") or {}).get("video_mixed") or {})
+            url = (shortcut.get("data") or {}).get("download_url")
+            if url:
+                return url
+        return None
+
+    def delete_bot_media(self, bot_id: str) -> None:
+        """Permanently delete everything Recall stores for a bot (video, audio,
+        transcript). Irreversible — only call once our own copies are verified."""
+        resp = requests.post(f"{self.base}/bot/{bot_id}/delete_media/",
+                             headers=self._headers, timeout=_TIMEOUT)
+        resp.raise_for_status()
+
     def fetch_transcript_segments(self, bot_id: str) -> list:
         """Resolve the download URL for a finished bot and return the parsed
         segment array. Raises if the transcript isn't ready yet."""

@@ -20,6 +20,7 @@ from drive import DriveClient
 from forecast import ForecastClient
 from gemini import GeminiClient
 from hubspot import HubSpotClient
+from media_copy import start_media_copy_worker
 from recall import RecallClient
 from recall_queue import RecallQueue, RecallTranscriptStore
 from sheet import SheetClient
@@ -270,6 +271,9 @@ def run() -> None:
         recall_store = RecallTranscriptStore(recall)
         # Schedules notetaker bots onto connected reps' calendar events.
         start_calendar_sync_worker(config)
+        # Copies finished recordings into our own bucket — inert until one is set.
+        if config.media_r2_bucket:
+            start_media_copy_worker(config)
         logger.info("Recall intake enabled")
 
     logger.info(f"Polling every {config.poll_interval_seconds}s")

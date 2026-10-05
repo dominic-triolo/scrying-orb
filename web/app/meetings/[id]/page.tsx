@@ -240,7 +240,19 @@ export default function MeetingPage() {
         </div>
 
         {/* Recording */}
-        {meeting.recording_file_id ? (
+        {meeting.has_recording ? (
+          <div className="px-8 pt-6">
+            <h2 className="text-sm font-semibold text-gray-700 mb-3">Recording</h2>
+            <div className="rounded-xl overflow-hidden border border-gray-200 bg-black aspect-video w-full max-w-3xl">
+              <video
+                src={`/api/meetings/${meeting.id}/recording`}
+                className="w-full h-full"
+                controls
+                preload="metadata"
+              />
+            </div>
+          </div>
+        ) : meeting.recording_file_id ? (
           <div className="px-8 pt-6">
             <h2 className="text-sm font-semibold text-gray-700 mb-3">Recording</h2>
             <div className="rounded-xl overflow-hidden border border-gray-200 bg-black aspect-video w-full max-w-3xl">
