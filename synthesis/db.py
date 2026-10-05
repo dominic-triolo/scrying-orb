@@ -454,3 +454,43 @@ class DBClient:
             with conn.cursor() as cur:
                 cur.execute(sql)
                 return {r[0].lower() for r in cur.fetchall()}
+
+    # ── Notetaker media copy (migration 013) ─────────────────────────────────
+
+    def get_recall_media_pending(self, max_attempts: int) -> list[dict]:
+        """Synthesized Recall bots whose media hasn't been copied to our bucket yet."""
+        sql = """
+            SELECT id, bot_id, media_attempts
+            FROM recall_pending_meetings
+            WHERE status = 'complete'
+              AND (media_status = 'pending'
+                   OR (media_status = 'error' AND media_attempts < %s))
+            ORDER BY created_at ASC
+            LIMIT 5
+        """
+        with self._connect() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(sql, (max_attempts,))
+                return [dict(r) for r in cur.fetchall()]
+
+    def set_recall_media_status(self, pending_id: str, status: str, notes: str = "") -> None:
+        sql = """
+            UPDATE recall_pending_meetings SET
+                media_status   = %s,
+                media_notes    = %s,
+                media_attempts = media_attempts + 1
+            WHERE id = %s
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (status, notes[:500] or None, pending_id))
+                conn.commit()
+
+    def set_meeting_recording_key(self, pairing_key: str, recording_key: str) -> bool:
+        sql = "UPDATE meetings SET recording_key = %s WHERE pairing_key = %s"
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (recording_key, pairing_key))
+                updated = cur.rowcount > 0
+                conn.commit()
+        return updated
