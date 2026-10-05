@@ -121,6 +121,19 @@ class RecallClient:
                 return url
         return None
 
+    def fetch_participants(self, bot: dict) -> list | None:
+        """Everyone the bot saw in the call ({id, name, is_host, ...}), from the
+        recording's participant-events artifact. None when the bot has no such
+        artifact — which is "unknown", not "nobody came"."""
+        for rec in (bot.get("recordings") or []):
+            shortcut = ((rec.get("media_shortcuts") or {}).get("participant_events") or {})
+            url = (shortcut.get("data") or {}).get("participants_download_url")
+            if url:
+                resp = requests.get(url, timeout=_TIMEOUT)   # presigned — no auth header
+                resp.raise_for_status()
+                return resp.json()
+        return None
+
     def delete_bot_media(self, bot_id: str) -> None:
         """Permanently delete everything Recall stores for a bot (video, audio,
         transcript). Irreversible — only call once our own copies are verified."""

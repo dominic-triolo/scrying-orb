@@ -116,6 +116,12 @@ def process_row(
             except (ValueError, AttributeError) as exc:
                 logger.warning(f"HubSpot meeting info lookup skipped: {exc}")
 
+        # HubSpot's outcome wins when it has one; otherwise fall back on what the
+        # notetaker saw (see recall_queue — Sheet rows never carry this flag).
+        if not meeting_outcome and row.get("inferred_no_show"):
+            meeting_outcome = "NO_SHOW"
+            logger.info(f"Inferred no-show for {pairing_key}: only one person joined the call")
+
         logger.info(f"Meeting type: {meeting_type} ({meeting_type_source}), outcome: {meeting_outcome}")
 
         # 3. Gate synthesis on meeting outcome
@@ -147,6 +153,8 @@ def process_row(
 
         # 4. Read transcript from Shared Meetings Drive folder
         transcript = drive.read_transcript(row["transcript_copy_id"])
+        if not transcript.strip():
+            raise RuntimeError("transcript is empty — nothing to synthesize")
 
         # 5. Compute talk ratio (pure string parsing — no API call)
         talk_ratio = compute_talk_ratio(transcript, row.get("recording_owner", ""))
