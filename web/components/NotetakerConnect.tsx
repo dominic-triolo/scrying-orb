@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import NotetakerAdd from './NotetakerAdd'
 
 interface CalendarState {
   configured: boolean
@@ -84,6 +85,7 @@ export default function NotetakerConnect() {
       {notice && !state.connected && (
         <p className="mt-1 text-[11px] leading-snug text-amber-400">{notice}</p>
       )}
+      <NotetakerAdd />
     </div>
   )
 }
