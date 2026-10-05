@@ -28,6 +28,12 @@ class Config:
     nurture_ingest_secret: str = ""
     nurture_web_url: str = ""       # base URL of the scrying-orb web app, for the deep link
 
+    # Recall.ai meeting-bot ingest (replacing the Drive transcript scheme) — all
+    # optional; unset ⇒ the Recall path is inert and the legacy Drive path is used.
+    recall_api_key: str = ""
+    recall_region: str = "us-west-2"
+    recall_webhook_secret: str = ""
+
     @classmethod
     def from_env(cls) -> "Config":
         sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
@@ -46,4 +52,7 @@ class Config:
             nurture_ingest_url=os.environ.get("NURTURE_INGEST_URL", ""),
             nurture_ingest_secret=os.environ.get("NURTURE_INGEST_SECRET", ""),
             nurture_web_url=os.environ.get("SCRYING_ORB_WEB_URL", ""),
+            recall_api_key=os.environ.get("RECALL_API_KEY", ""),
+            recall_region=os.environ.get("RECALL_REGION", "us-west-2"),
+            recall_webhook_secret=os.environ.get("RECALL_WEBHOOK_SECRET", ""),
         )
