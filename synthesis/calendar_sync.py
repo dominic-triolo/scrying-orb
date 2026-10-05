@@ -1,0 +1,168 @@
+"""
+Recall.ai calendar auto-join.
+
+Reps connect their Google Calendar to Recall from the orb. Recall then webhooks the
+web app whenever a connected calendar changes; the web app only records that a sync
+is owed (recall_calendars.sync_from). This module is the worker side: for each owed
+calendar it lists the changed events and, per event, schedules or removes the
+notetaker bot.
+
+Recording rule (same as the retired Apps Script mover): a Google Meet event with at
+least one attendee outside @trovatrip.com, that the calendar owner hasn't declined.
+
+The bot is scheduled with the metadata recall_queue reads once the call is
+transcribed — meeting_name, recording_owner, external_attendees — which is the only
+way those reach synthesis, since Google Meet exposes neither to the bot.
+"""
+import logging
+import threading
+import time
+from datetime import datetime, timezone
+
+from config import Config
+from db import DBClient
+from recall import BOT_NAME, RECORDING_CONFIG, RecallClient
+
+logger = logging.getLogger(__name__)
+
+POLL_SECONDS = 30
+INTERNAL_DOMAIN = "trovatrip.com"
+# Recall caps each bot metadata value at 500 characters.
+_METADATA_MAX = 500
+# Calendar "attendees" that aren't people.
+_NON_PERSON_SUFFIXES = ("@resource.calendar.google.com", "@group.calendar.google.com")
+
+
+def _is_internal(email: str) -> bool:
+    return email.lower().endswith("@" + INTERNAL_DOMAIN)
+
+
+def _join_emails(emails: list[str]) -> str:
+    """Comma-join, dropping whole trailing emails rather than cutting one in half."""
+    out = ""
+    for email in emails:
+        candidate = f"{out}, {email}" if out else email
+        if len(candidate) > _METADATA_MAX:
+            break
+        out = candidate
+    return out
+
+
+def recording_plan(event: dict, calendar_email: str, connected_emails: set[str]) -> dict | None:
+    """Decide whether `event` gets a bot. Returns the bot metadata if so, else None.
+    Pure function over Recall's calendar-event object (Google `raw` payload)."""
+    raw = event.get("raw") or {}
+    if event.get("is_deleted") or raw.get("status") == "cancelled":
+        return None
+    # outOfOffice / focusTime / workingLocation blocks are never calls.
+    if raw.get("eventType", "default") != "default":
+        return None
+    if "meet.google.com" not in (event.get("meeting_url") or ""):
+        return None
+
+    external: list[str] = []
+    for attendee in raw.get("attendees") or []:
+        email = (attendee.get("email") or "").strip().lower()
+        if attendee.get("self") and attendee.get("responseStatus") == "declined":
+            return None
+        if not email or attendee.get("resource") or email.endswith(_NON_PERSON_SUFFIXES):
+            continue
+        if not _is_internal(email):
+            external.append(email)
+    if not external:
+        return None
+
+    # When two connected reps share a call they share one bot (see the dedup key),
+    # and both calendars schedule it — so the owner has to come out the same from
+    # either side. The organizer wins if they're connected; otherwise it's whoever
+    # this calendar belongs to.
+    organizer = ((raw.get("organizer") or {}).get("email") or "").strip().lower()
+    owner = organizer if organizer in connected_emails else calendar_email.lower()
+
+    return {
+        "meeting_name":       (raw.get("summary") or "Untitled meeting")[:_METADATA_MAX],
+        "recording_owner":    owner,
+        "external_attendees": _join_emails(external),
+    }
+
+
+def sync_calendar(calendar: dict, recall: RecallClient, connected_emails: set[str]) -> dict:
+    """Apply recording_plan to every event changed since the calendar's watermark.
+    Returns counts for the log line. Raises on Recall errors so the sync stays owed."""
+    now = datetime.now(timezone.utc)
+    sync_from = calendar["sync_from"]
+    events = recall.list_calendar_events(
+        calendar["recall_calendar_id"],
+        updated_at_gte=sync_from.isoformat() if sync_from else None,
+    )
+    # Soonest first, so a rate limit or crash costs the far-future events, not today's.
+    events.sort(key=lambda e: e.get("start_time") or "")
+
+    counts = {"scheduled": 0, "removed": 0, "skipped": 0}
+    for event in events:
+        end = _parse_ts(event.get("end_time"))
+        if end and end <= now:
+            counts["skipped"] += 1      # Recall rejects scheduling for ended events
+            continue
+
+        metadata = recording_plan(event, calendar["email"], connected_emails)
+        if metadata:
+            recall.schedule_event_bot(
+                event["id"],
+                # One bot per meeting across every connected calendar.
+                deduplication_key=f"{event.get('start_time')}-{event.get('meeting_url')}",
+                bot_config={
+                    "bot_name": BOT_NAME,
+                    "recording_config": RECORDING_CONFIG,
+                    "metadata": metadata,
+                },
+            )
+            counts["scheduled"] += 1
+        elif event.get("bots") and not event.get("is_deleted"):
+            # No longer qualifies (externals removed, declined, Meet link dropped).
+            # Deleted events are unscheduled by Recall itself.
+            recall.unschedule_event_bot(event["id"])
+            counts["removed"] += 1
+        else:
+            counts["skipped"] += 1
+    return counts
+
+
+def _parse_ts(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def run_calendar_sync_loop(config: Config, poll_seconds: int = POLL_SECONDS) -> None:
+    db = DBClient(config)
+    recall = RecallClient(config.recall_api_key, config.recall_region)
+    logger.info(f"Calendar sync polling every {poll_seconds}s")
+    while True:
+        try:
+            owed = db.get_calendars_needing_sync()
+            connected = db.get_connected_calendar_emails() if owed else set()
+            for calendar in owed:
+                try:
+                    counts = sync_calendar(calendar, recall, connected)
+                    db.clear_calendar_sync(str(calendar["id"]), calendar["sync_requested_at"])
+                    logger.info(f"Calendar sync {calendar['email']}: {counts}")
+                except Exception as err:
+                    # Left owed — retried next tick.
+                    logger.error(f"Calendar sync failed for {calendar['email']}: {err}",
+                                 exc_info=True)
+        except Exception as loop_err:
+            logger.error(f"Calendar sync loop error: {loop_err}", exc_info=True)
+        time.sleep(poll_seconds)
+
+
+def start_calendar_sync_worker(config: Config) -> threading.Thread:
+    """Spawn the calendar-sync poller as a daemon thread alongside the synthesis loop."""
+    t = threading.Thread(
+        target=run_calendar_sync_loop, args=(config,), daemon=True, name="calendar-sync"
+    )
+    t.start()
+    return t

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
-import { enqueueRecallBot } from '@/lib/db'
+import { enqueueRecallBot, requestRecallCalendarSync, setRecallCalendarStatus } from '@/lib/db'
+import { getRecallCalendarStatus } from '@/lib/recallCalendar'
 import { verifyRecallRequest } from '@/lib/recall'
 
 export const runtime = 'nodejs'
@@ -10,9 +11,11 @@ export const dynamic = 'force-dynamic'
  * next-auth middleware) — every request is verified against the workspace
  * verification secret instead.
  *
- *   transcript.done    → queue the bot for the synthesis worker
- *   transcript.failed  → record it as an error row so the miss is visible
- *   anything else      → acknowledged and ignored
+ *   transcript.done       → queue the bot for the synthesis worker
+ *   transcript.failed     → record it as an error row so the miss is visible
+ *   calendar.sync_events  → flag the calendar for the worker's calendar-sync thread
+ *   calendar.update       → mirror the calendar's status (e.g. disconnected)
+ *   anything else         → acknowledged and ignored
  */
 export async function POST(req: Request) {
   const secret = process.env.RECALL_WEBHOOK_SECRET
@@ -34,11 +37,28 @@ export async function POST(req: Request) {
   }
 
   const event: string = body?.event ?? ''
+  const data = body?.data ?? {}
+
+  if (event === 'calendar.sync_events') {
+    if (!data.calendar_id || !data.last_updated_ts) {
+      return NextResponse.json({ ok: true, ignored: 'incomplete' })
+    }
+    const known = await requestRecallCalendarSync(data.calendar_id, data.last_updated_ts)
+    return NextResponse.json({ ok: true, known })
+  }
+
+  if (event === 'calendar.update') {
+    if (data.calendar_id) {
+      const status = await getRecallCalendarStatus(data.calendar_id)
+      if (status) await setRecallCalendarStatus(data.calendar_id, status)
+    }
+    return NextResponse.json({ ok: true })
+  }
+
   if (event !== 'transcript.done' && event !== 'transcript.failed') {
     return NextResponse.json({ ok: true, ignored: event })
   }
 
-  const data = body?.data ?? {}
   const botId: string | undefined = data.bot?.id
   if (!botId) {
     // Desktop-SDK uploads have no bot; nothing for the worker to fetch.
