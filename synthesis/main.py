@@ -19,6 +19,8 @@ from drive import DriveClient
 from forecast import ForecastClient
 from gemini import GeminiClient
 from hubspot import HubSpotClient
+from recall import RecallClient
+from recall_queue import RecallQueue, RecallTranscriptStore
 from sheet import SheetClient
 from datetime import datetime
 from utils import compute_talk_ratio, detect_meeting_type
@@ -259,6 +261,14 @@ def run() -> None:
     hubspot    = HubSpotClient(config)
     db         = DBClient(config)
 
+    # Recall.ai intake — inert until RECALL_API_KEY is set.
+    recall_queue = recall_store = None
+    if config.recall_api_key:
+        recall = RecallClient(config.recall_api_key, config.recall_region)
+        recall_queue = RecallQueue(db, recall)
+        recall_store = RecallTranscriptStore(recall)
+        logger.info("Recall intake enabled")
+
     logger.info(f"Polling every {config.poll_interval_seconds}s")
 
     # Cross-transcript analysis runs on its own faster poll loop (daemon thread)
@@ -272,7 +282,18 @@ def run() -> None:
             for row in pending:
                 process_row(row, sheet, drive, gemini, forecaster, hubspot, db, config)
 
-            # 2. Meetings queued for re-synthesis due to manual type change
+            # 2. Meetings the Recall webhook queued. Same pipeline — the queue and
+            #    transcript store stand in for the Sheet and Drive clients. Own
+            #    try so a Recall outage can't starve re-synthesis below.
+            if recall_queue:
+                try:
+                    for row in recall_queue.get_pending_rows():
+                        process_row(row, recall_queue, recall_store, gemini,
+                                    forecaster, hubspot, db, config)
+                except Exception as recall_err:
+                    logger.error(f"Recall intake error: {recall_err}", exc_info=True)
+
+            # 3. Meetings queued for re-synthesis due to manual type change
             for meeting in db.get_pending_resynthesis():
                 resynthesize_meeting(meeting, gemini, db, config)
 

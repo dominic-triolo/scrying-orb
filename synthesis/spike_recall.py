@@ -89,6 +89,10 @@ def main() -> int:
                     help="fetch a finished bot's transcript and flatten it")
     ap.add_argument("--rep", default="rachel.gillette@trovatrip.com",
                     help="rep email, for the talk-ratio check")
+    ap.add_argument("--name", metavar="MEETING_NAME",
+                    help="with --create: meeting title to store on the bot")
+    ap.add_argument("--attendees", metavar="EMAILS",
+                    help="with --create: comma-separated external attendee emails")
     ap.add_argument("--raw", action="store_true",
                     help="also dump the raw Recall segment JSON")
     args = ap.parse_args()
@@ -107,7 +111,13 @@ def main() -> int:
                           os.environ.get("RECALL_REGION", "us-west-2"))
 
     if args.create:
-        bot = client.create_bot(args.create)
+        # Same metadata keys recall_queue reads when the webhook queues this bot.
+        metadata = {"recording_owner": args.rep}
+        if args.name:
+            metadata["meeting_name"] = args.name
+        if args.attendees:
+            metadata["external_attendees"] = args.attendees
+        bot = client.create_bot(args.create, metadata=metadata)
         print(f"Bot dispatched. id = {bot.get('id')}")
         print("Let it join + record a short call, then re-run with "
               f"--bot {bot.get('id')} once the transcript is ready.")

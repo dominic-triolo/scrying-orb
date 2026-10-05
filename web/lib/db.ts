@@ -630,3 +630,26 @@ export async function getAnalysisFindingSample(
   )
   return rows
 }
+
+// ── Recall.ai ingest queue ────────────────────────────────────────────────────
+
+/**
+ * Queue a Recall bot for the synthesis worker (migration 011). Idempotent on
+ * bot_id — Recall retries deliveries, and a repeat must not re-queue a bot the
+ * worker already processed. Returns false when the bot was already queued.
+ */
+export async function enqueueRecallBot(args: {
+  botId: string
+  recordingId: string | null
+  transcriptId: string | null
+  status: 'pending' | 'error'
+  notes: string | null
+}): Promise<boolean> {
+  const { rowCount } = await pool.query(
+    `INSERT INTO recall_pending_meetings (bot_id, recording_id, transcript_id, status, notes)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (bot_id) DO NOTHING`,
+    [args.botId, args.recordingId, args.transcriptId, args.status, args.notes]
+  )
+  return (rowCount ?? 0) > 0
+}
