@@ -19,15 +19,18 @@ way those reach synthesis, since Google Meet exposes neither to the bot.
 import logging
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from config import Config
 from db import DBClient
-from recall import BOT_NAME, RECORDING_CONFIG, RecallClient
+from recall import AUTOMATIC_LEAVE, BOT_NAME, RECORDING_CONFIG, RecallClient
 
 logger = logging.getLogger(__name__)
 
 POLL_SECONDS = 30
+# The bot enters this long before the scheduled start, so it's already settled in
+# when people arrive instead of popping in over the opening hellos.
+JOIN_EARLY = timedelta(minutes=1)
 INTERNAL_DOMAIN = "trovatrip.com"
 # Recall caps each bot metadata value at 500 characters.
 _METADATA_MAX = 500
@@ -116,11 +119,7 @@ def sync_calendar(calendar: dict, recall: RecallClient, connected_emails: set[st
                 event["id"],
                 # One bot per meeting across every connected calendar.
                 deduplication_key=f"{event.get('start_time')}-{event.get('meeting_url')}",
-                bot_config={
-                    "bot_name": BOT_NAME,
-                    "recording_config": RECORDING_CONFIG,
-                    "metadata": metadata,
-                },
+                bot_config=_bot_config(metadata, _parse_ts(event.get("start_time")), now),
             )
             counts["scheduled"] += 1
         elif event.get("bots") and not event.get("is_deleted"):
@@ -131,6 +130,20 @@ def sync_calendar(calendar: dict, recall: RecallClient, connected_emails: set[st
         else:
             counts["skipped"] += 1
     return counts
+
+
+def _bot_config(metadata: dict, start: datetime | None, now: datetime) -> dict:
+    config = {
+        "bot_name": BOT_NAME,
+        "recording_config": RECORDING_CONFIG,
+        "automatic_leave": AUTOMATIC_LEAVE,
+        "metadata": metadata,
+    }
+    # Left unset, Recall joins at the event's start time. Only override while the
+    # early time is still ahead of us — a meeting about to begin keeps the default.
+    if start and start - JOIN_EARLY > now:
+        config["join_at"] = (start - JOIN_EARLY).isoformat()
+    return config
 
 
 def _parse_ts(value: str | None) -> datetime | None:
