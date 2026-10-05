@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useSession, signOut } from 'next-auth/react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import NotetakerConnect from './NotetakerConnect'
 
 interface SidebarProps {
   search: string
@@ -190,6 +191,7 @@ export default function Sidebar({
 
       {/* User footer */}
       <div className="border-t border-slate-700 px-4 py-4">
+        <NotetakerConnect />
         <div className="flex items-center gap-3">
           {session?.user?.image && (
             <img src={session.user.image} alt="" className="h-7 w-7 rounded-full" />

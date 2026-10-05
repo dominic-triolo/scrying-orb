@@ -418,3 +418,39 @@ class DBClient:
             with conn.cursor() as cur:
                 cur.execute(sql, (status, notes or None, pending_id))
                 conn.commit()
+
+    # ── Recall.ai calendar connections (migration 012) ───────────────────────
+
+    def get_calendars_needing_sync(self) -> list[dict]:
+        """Connected calendars the webhook flagged as changed (sync_from set)."""
+        sql = """
+            SELECT id, email, recall_calendar_id, sync_from, sync_requested_at
+            FROM recall_calendars
+            WHERE sync_from IS NOT NULL AND status = 'connected'
+            ORDER BY sync_requested_at ASC
+        """
+        with self._connect() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(sql)
+                return [dict(r) for r in cur.fetchall()]
+
+    def clear_calendar_sync(self, calendar_row_id: str, seen_requested_at) -> bool:
+        """Mark a sync done — unless another request landed while it ran, in which
+        case the row stays owed and the next tick re-syncs (scheduling is idempotent)."""
+        sql = """
+            UPDATE recall_calendars SET sync_from = NULL
+            WHERE id = %s AND sync_requested_at IS NOT DISTINCT FROM %s
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (calendar_row_id, seen_requested_at))
+                cleared = cur.rowcount > 0
+                conn.commit()
+        return cleared
+
+    def get_connected_calendar_emails(self) -> set[str]:
+        sql = "SELECT email FROM recall_calendars WHERE status = 'connected'"
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                return {r[0].lower() for r in cur.fetchall()}

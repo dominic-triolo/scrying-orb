@@ -45,6 +45,16 @@ logger = logging.getLogger("recall")
 _TIMEOUT = 30
 
 
+BOT_NAME = "TrovaTrip Notetaker"
+
+# Recall's built-in transcription provider ($0.15/recording-hour).
+# `recallai_async` is only valid on the post-meeting create_transcript endpoint;
+# at bot creation the same model is `recallai_streaming` in prioritize_accuracy
+# mode, and the transcript lands on the recording.
+RECORDING_CONFIG = {"transcript": {"provider": {
+    "recallai_streaming": {"mode": "prioritize_accuracy", "language_code": "auto"}}}}
+
+
 class RecallClient:
     """Minimal Recall.ai REST client. Region-scoped base URL, e.g.
     https://us-west-2.recall.ai/api/v1 (set RECALL_REGION to match your account)."""
@@ -53,13 +63,14 @@ class RecallClient:
         if not api_key:
             raise ValueError("RecallClient requires an API key (RECALL_API_KEY)")
         self.base = f"https://{region}.recall.ai/api/v1"
+        self.base_v2 = f"https://{region}.recall.ai/api/v2"   # calendar endpoints
         self._headers = {
             "Authorization": f"Token {api_key}",
             "Content-Type": "application/json",
         }
 
     # ── bots ────────────────────────────────────────────────────────────────
-    def create_bot(self, meeting_url: str, bot_name: str = "TrovaTrip Notetaker",
+    def create_bot(self, meeting_url: str, bot_name: str = BOT_NAME,
                    transcribe: bool = True, metadata: dict | None = None) -> dict:
         """Send a bot into a live meeting. Returns the bot object (grab `id`).
         Used for the Phase-1 spike; in production bots are auto-deployed by the
@@ -70,13 +81,7 @@ class RecallClient:
         if metadata:
             payload["metadata"] = metadata
         if transcribe:
-            # Recall's built-in transcription provider ($0.15/recording-hour).
-            # `recallai_async` is only valid on the post-meeting create_transcript
-            # endpoint; at bot creation the same model is `recallai_streaming` in
-            # prioritize_accuracy mode, and the transcript lands on the recording.
-            payload["recording_config"] = {"transcript": {"provider": {
-                "recallai_streaming": {"mode": "prioritize_accuracy",
-                                       "language_code": "auto"}}}}
+            payload["recording_config"] = RECORDING_CONFIG
         resp = requests.post(f"{self.base}/bot", headers=self._headers,
                              json=payload, timeout=_TIMEOUT)
         resp.raise_for_status()
@@ -115,6 +120,43 @@ class RecallClient:
         resp = requests.get(url, timeout=_TIMEOUT)
         resp.raise_for_status()
         return resp.json()
+
+
+    # ── calendar v2 ───────────────────────────────────────────────────────────
+    def list_calendar_events(self, calendar_id: str, updated_at_gte: str | None = None,
+                             start_time_gte: str | None = None) -> list:
+        """All events on a connected calendar matching the filters (follows
+        pagination). Recall only holds events from 1 day back to 28 days ahead."""
+        params = {"calendar_id": calendar_id}
+        if updated_at_gte:
+            params["updated_at__gte"] = updated_at_gte
+        if start_time_gte:
+            params["start_time__gte"] = start_time_gte
+        events: list = []
+        url, query = f"{self.base_v2}/calendar-events/", params
+        while url:
+            resp = requests.get(url, headers=self._headers, params=query, timeout=_TIMEOUT)
+            resp.raise_for_status()
+            page = resp.json()
+            events.extend(page.get("results") or [])
+            # `next` already carries the query string — don't re-send params.
+            url, query = page.get("next"), None
+        return events
+
+    def schedule_event_bot(self, event_id: str, deduplication_key: str, bot_config: dict) -> dict:
+        """Schedule (or replace) the bot for a calendar event. bot_config is not
+        merged — send the complete config every time."""
+        resp = requests.post(f"{self.base_v2}/calendar-events/{event_id}/bot/",
+                             headers=self._headers, timeout=_TIMEOUT,
+                             json={"deduplication_key": deduplication_key,
+                                   "bot_config": bot_config})
+        resp.raise_for_status()
+        return resp.json()
+
+    def unschedule_event_bot(self, event_id: str) -> None:
+        resp = requests.delete(f"{self.base_v2}/calendar-events/{event_id}/bot/",
+                               headers=self._headers, timeout=_TIMEOUT)
+        resp.raise_for_status()
 
 
 def _latest_status(bot: dict) -> str:

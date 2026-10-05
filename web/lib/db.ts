@@ -653,3 +653,66 @@ export async function enqueueRecallBot(args: {
   )
   return (rowCount ?? 0) > 0
 }
+
+// ── Recall.ai calendar connections (migration 012) ────────────────────────────
+
+export interface RecallCalendar {
+  email: string
+  recall_calendar_id: string
+  status: string
+}
+
+export async function getRecallCalendar(email: string): Promise<RecallCalendar | null> {
+  const { rows } = await pool.query<RecallCalendar>(
+    `SELECT email, recall_calendar_id, status FROM recall_calendars WHERE email = $1`,
+    [email.toLowerCase()]
+  )
+  return rows[0] ?? null
+}
+
+/**
+ * Record a (re)connected calendar and flag it for a full sync: sync_from at the
+ * epoch makes the worker walk every event Recall holds for it.
+ */
+export async function saveRecallCalendar(email: string, recallCalendarId: string): Promise<void> {
+  await pool.query(
+    `INSERT INTO recall_calendars (email, recall_calendar_id, status, sync_from, sync_requested_at)
+     VALUES ($1, $2, 'connected', 'epoch', NOW())
+     ON CONFLICT (email) DO UPDATE SET
+       recall_calendar_id = EXCLUDED.recall_calendar_id,
+       status             = 'connected',
+       sync_from          = 'epoch',
+       sync_requested_at  = NOW()`,
+    [email.toLowerCase(), recallCalendarId]
+  )
+}
+
+export async function removeRecallCalendar(email: string): Promise<void> {
+  await pool.query(`DELETE FROM recall_calendars WHERE email = $1`, [email.toLowerCase()])
+}
+
+/**
+ * calendar.sync_events: note that events changed since `lastUpdatedTs`. Keeps the
+ * oldest outstanding watermark so back-to-back webhooks don't skip changes; the
+ * worker's calendar-sync thread does the actual scheduling.
+ */
+export async function requestRecallCalendarSync(
+  recallCalendarId: string,
+  lastUpdatedTs: string
+): Promise<boolean> {
+  const { rowCount } = await pool.query(
+    `UPDATE recall_calendars SET
+       sync_from         = LEAST(COALESCE(sync_from, $2::timestamptz), $2::timestamptz),
+       sync_requested_at = NOW()
+     WHERE recall_calendar_id = $1`,
+    [recallCalendarId, lastUpdatedTs]
+  )
+  return (rowCount ?? 0) > 0
+}
+
+export async function setRecallCalendarStatus(recallCalendarId: string, status: string): Promise<void> {
+  await pool.query(
+    `UPDATE recall_calendars SET status = $2 WHERE recall_calendar_id = $1`,
+    [recallCalendarId, status]
+  )
+}

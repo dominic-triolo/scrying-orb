@@ -12,6 +12,7 @@ import logging
 import time
 
 from analysis import start_analysis_worker
+from calendar_sync import start_calendar_sync_worker
 from config import Config
 from db import DBClient
 from nurture_emit import emit_meeting_processed
@@ -267,6 +268,8 @@ def run() -> None:
         recall = RecallClient(config.recall_api_key, config.recall_region)
         recall_queue = RecallQueue(db, recall)
         recall_store = RecallTranscriptStore(recall)
+        # Schedules notetaker bots onto connected reps' calendar events.
+        start_calendar_sync_worker(config)
         logger.info("Recall intake enabled")
 
     logger.info(f"Polling every {config.poll_interval_seconds}s")
