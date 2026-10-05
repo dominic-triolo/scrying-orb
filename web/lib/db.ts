@@ -729,3 +729,54 @@ export async function setRecallCalendarStatus(recallCalendarId: string, status: 
     [recallCalendarId, status]
   )
 }
+
+// ── Notetaker status (leadership) ─────────────────────────────────────────────
+
+export interface NotetakerCalendar {
+  email: string
+  status: string                 // connected | connecting | disconnected
+  sync_pending: boolean          // a calendar sync is owed to the worker
+  connected_at: string
+  updated_at: string
+}
+
+export interface NotetakerCall {
+  bot_id: string
+  received_at: string            // when Recall told us the transcript was ready
+  status: string                 // pending | complete | error
+  notes: string | null
+  media_status: string           // pending | copied | none | error
+  media_notes: string | null
+  meeting_id: string | null
+  meeting_name: string | null
+  recording_owner: string | null
+}
+
+export interface NotetakerStatus {
+  calendars: NotetakerCalendar[]
+  calls: NotetakerCall[]
+}
+
+/** Everything the notetaker status page shows: who is connected, and what
+ *  happened to each recent call on its way from Recall into the orb. */
+export async function getNotetakerStatus(callLimit = 100): Promise<NotetakerStatus> {
+  const [calendars, calls] = await Promise.all([
+    pool.query<NotetakerCalendar>(
+      `SELECT email, status, (sync_from IS NOT NULL) AS sync_pending,
+              created_at AS connected_at, updated_at
+       FROM recall_calendars
+       ORDER BY (status <> 'connected') DESC, email`
+    ),
+    pool.query<NotetakerCall>(
+      `SELECT p.bot_id, p.created_at AS received_at, p.status, p.notes,
+              p.media_status, p.media_notes,
+              m.id AS meeting_id, m.meeting_name, m.recording_owner
+       FROM recall_pending_meetings p
+       LEFT JOIN meetings m ON m.pairing_key = 'recall:' || p.bot_id
+       ORDER BY p.created_at DESC
+       LIMIT $1`,
+      [callLimit]
+    ),
+  ])
+  return { calendars: calendars.rows, calls: calls.rows }
+}
