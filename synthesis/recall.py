@@ -199,17 +199,76 @@ def _speaker_label(participant: dict) -> str:
     return f"Speaker {participant.get('id', '?')}"
 
 
-def flatten_transcript(segments: list) -> str:
-    """Recall segment array → "Speaker Name: utterance" lines (one per segment),
-    the format the rest of synthesis already expects. Empty segments (e.g. the
-    bot itself, which never speaks) are dropped."""
-    lines: list[str] = []
+# ── overlap smoothing ────────────────────────────────────────────────────────
+# Recall diarizes each participant's audio stream separately and interleaves by
+# time, so when two people talk at once a sentence comes back cut at word
+# boundaries: "We" / "I" / "can't" / "see." / "just. On Google anymore."
+# A turn is folded back onto the same speaker's previous one when the other
+# person's interruption was only a few words, the speaker hadn't finished their
+# sentence, and they carried straight on. Words are reordered, never dropped.
+_INTERJECTION_MAX_WORDS = 3
+_RESUME_MAX_GAP_SECONDS = 1.0
+_SENTENCE_END = re.compile(r"[.?!][\"')\]]*$")
+
+
+def _word_time(word: dict, edge: str) -> float | None:
+    return (word.get(edge) or {}).get("relative")
+
+
+def _turns(segments: list) -> list[dict]:
+    """Non-empty segments as {speaker, text, words, start, end}."""
+    turns = []
     for seg in segments or []:
-        participant = seg.get("participant") or {}
-        words = seg.get("words") or []
-        text = " ".join((w.get("text") or "").strip() for w in words).strip()
-        text = _SPACE_BEFORE_PUNCT.sub(r"\1", text)
-        if not text:
-            continue
-        lines.append(f"{_speaker_label(participant)}: {text}")
-    return "\n".join(lines)
+        words = [w for w in (seg.get("words") or []) if (w.get("text") or "").strip()]
+        if not words:
+            continue        # e.g. the bot itself, which never speaks
+        text = " ".join(w["text"].strip() for w in words)
+        turns.append({
+            "speaker": _speaker_label(seg.get("participant") or {}),
+            "text":    _SPACE_BEFORE_PUNCT.sub(r"\1", text),
+            "words":   len(words),
+            "start":   _word_time(words[0], "start_timestamp"),
+            "end":     _word_time(words[-1], "end_timestamp"),
+        })
+    return turns
+
+
+def _extend(turn: dict, more: dict) -> None:
+    turn["text"] = f"{turn['text']} {more['text']}"
+    turn["words"] += more["words"]
+    turn["end"] = more["end"]
+
+
+def _resumes(earlier: dict, interjection: dict, turn: dict) -> bool:
+    """Is `turn` the rest of `earlier`'s sentence, split only by `interjection`?"""
+    if earlier["speaker"] != turn["speaker"] or interjection["words"] > _INTERJECTION_MAX_WORDS:
+        return False
+    if _SENTENCE_END.search(earlier["text"]):
+        return False
+    if earlier["end"] is None or turn["start"] is None:
+        return False        # no timing ⇒ can't tell a resume from a new thought
+    return turn["start"] - earlier["end"] <= _RESUME_MAX_GAP_SECONDS
+
+
+def _smooth(turns: list[dict]) -> list[dict]:
+    out: list[dict] = []
+    for turn in turns:
+        if out and out[-1]["speaker"] == turn["speaker"]:
+            _extend(out[-1], turn)
+        elif len(out) >= 2 and _resumes(out[-2], out[-1], turn):
+            # Rejoin the sentence; the interjection now follows it.
+            _extend(out[-2], turn)
+        else:
+            out.append(dict(turn))
+    return out
+
+
+def flatten_transcript(segments: list, smooth: bool = True) -> str:
+    """Recall segment array → "Speaker Name: utterance" lines, the format the rest
+    of synthesis already expects. Empty segments (e.g. the bot itself, which never
+    speaks) are dropped. With `smooth`, sentences that overlapping speech cut into
+    fragments are rejoined (see above); pass False for one line per raw segment."""
+    turns = _turns(segments)
+    if smooth:
+        turns = _smooth(turns)
+    return "\n".join(f"{t['speaker']}: {t['text']}" for t in turns)
