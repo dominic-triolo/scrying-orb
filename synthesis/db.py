@@ -448,13 +448,6 @@ class DBClient:
                 conn.commit()
         return cleared
 
-    def get_connected_calendar_emails(self) -> set[str]:
-        sql = "SELECT email FROM recall_calendars WHERE status = 'connected'"
-        with self._connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(sql)
-                return {r[0].lower() for r in cur.fetchall()}
-
     # ── Notetaker media copy (migration 013) ─────────────────────────────────
 
     def get_recall_media_pending(self, max_attempts: int) -> list[dict]:

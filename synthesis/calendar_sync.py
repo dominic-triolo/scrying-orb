@@ -53,7 +53,7 @@ def _join_emails(emails: list[str]) -> str:
     return out
 
 
-def recording_plan(event: dict, calendar_email: str, connected_emails: set[str]) -> dict | None:
+def recording_plan(event: dict, calendar_email: str) -> dict | None:
     """Decide whether `event` gets a bot. Returns the bot metadata if so, else None.
     Pure function over Recall's calendar-event object (Google `raw` payload)."""
     raw = event.get("raw") or {}
@@ -80,12 +80,15 @@ def recording_plan(event: dict, calendar_email: str, connected_emails: set[str])
     if not external:
         return None
 
-    # When two connected reps share a call they share one bot (see the dedup key),
-    # and both calendars schedule it — so the owner has to come out the same from
-    # either side. The organizer wins if they're connected; otherwise it's whoever
-    # this calendar belongs to.
+    # The call belongs to whoever at TrovaTrip set it up — the rep whose booking
+    # link or invite it is — not to whichever connected calendar we happened to
+    # find it on. A manager invited to a rep's call would otherwise end up owning
+    # it. Reading it off the event also means every connected calendar that
+    # schedules this (shared) bot names the same owner. Only when the organizer is
+    # outside TrovaTrip (the prospect sent the invite) do we fall back to the
+    # calendar we found it on.
     organizer = ((raw.get("organizer") or {}).get("email") or "").strip().lower()
-    owner = organizer if organizer in connected_emails else calendar_email.lower()
+    owner = organizer if _is_internal(organizer) else calendar_email.lower()
 
     return {
         "meeting_name":       (raw.get("summary") or "Untitled meeting")[:_METADATA_MAX],
@@ -94,7 +97,7 @@ def recording_plan(event: dict, calendar_email: str, connected_emails: set[str])
     }
 
 
-def sync_calendar(calendar: dict, recall: RecallClient, connected_emails: set[str]) -> dict:
+def sync_calendar(calendar: dict, recall: RecallClient) -> dict:
     """Apply recording_plan to every event changed since the calendar's watermark.
     Returns counts for the log line. Raises on Recall errors so the sync stays owed."""
     now = datetime.now(timezone.utc)
@@ -113,7 +116,7 @@ def sync_calendar(calendar: dict, recall: RecallClient, connected_emails: set[st
             counts["skipped"] += 1      # Recall rejects scheduling for ended events
             continue
 
-        metadata = recording_plan(event, calendar["email"], connected_emails)
+        metadata = recording_plan(event, calendar["email"])
         if metadata:
             recall.schedule_event_bot(
                 event["id"],
@@ -161,11 +164,9 @@ def run_calendar_sync_loop(config: Config, poll_seconds: int = POLL_SECONDS) -> 
     logger.info(f"Calendar sync polling every {poll_seconds}s")
     while True:
         try:
-            owed = db.get_calendars_needing_sync()
-            connected = db.get_connected_calendar_emails() if owed else set()
-            for calendar in owed:
+            for calendar in db.get_calendars_needing_sync():
                 try:
-                    counts = sync_calendar(calendar, recall, connected)
+                    counts = sync_calendar(calendar, recall)
                     db.clear_calendar_sync(str(calendar["id"]), calendar["sync_requested_at"])
                     logger.info(f"Calendar sync {calendar['email']}: {counts}")
                 except Exception as err:
