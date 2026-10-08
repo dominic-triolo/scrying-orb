@@ -1,6 +1,7 @@
 const OUTCOME_CONFIG: Record<string, { label: string; classes: string }> = {
   COMPLETED:   { label: 'Completed',   classes: 'bg-emerald-50 border-emerald-200 text-emerald-700' },
   NO_SHOW:     { label: 'No Show',     classes: 'bg-red-50 border-red-200 text-red-700' },
+  CANCELED:    { label: 'Cancelled',   classes: 'bg-gray-100 border-gray-300 text-gray-600' },  // HubSpot's spelling
   CANCELLED:   { label: 'Cancelled',   classes: 'bg-gray-100 border-gray-300 text-gray-600' },
   RESCHEDULED: { label: 'Rescheduled', classes: 'bg-blue-50 border-blue-200 text-blue-700' },
 }

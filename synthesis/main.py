@@ -29,6 +29,17 @@ from utils import compute_talk_ratio, detect_meeting_type
 
 SILENT_FORECAST_PROPERTY = "silent_forecast_probability"
 
+# HubSpot meeting outcomes that mean the call did not take place. Only these stop
+# synthesis. SCHEDULED is HubSpot's value until the rep logs what happened — it
+# says nothing about the call, and a transcript in hand says it was held.
+NOT_HELD_OUTCOMES = {"NO_SHOW", "CANCELED", "CANCELLED", "RESCHEDULED"}
+
+
+def _settled_outcome(outcome: str | None) -> str | None:
+    """HubSpot's outcome if it actually records what happened, else None."""
+    value = (outcome or "").upper()
+    return value if value == "COMPLETED" or value in NOT_HELD_OUTCOMES else None
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -116,6 +127,10 @@ def process_row(
             except (ValueError, AttributeError) as exc:
                 logger.warning(f"HubSpot meeting info lookup skipped: {exc}")
 
+        if meeting_outcome and not _settled_outcome(meeting_outcome):
+            logger.info(f"Ignoring unsettled HubSpot outcome {meeting_outcome} for {pairing_key}")
+        meeting_outcome = _settled_outcome(meeting_outcome)
+
         # HubSpot's outcome wins when it has one; otherwise fall back on what the
         # notetaker saw (see recall_queue — Sheet rows never carry this flag).
         if not meeting_outcome and row.get("inferred_no_show"):
@@ -125,9 +140,9 @@ def process_row(
         logger.info(f"Meeting type: {meeting_type} ({meeting_type_source}), outcome: {meeting_outcome}")
 
         # 3. Gate synthesis on meeting outcome
-        # If HubSpot reports a known outcome that isn't COMPLETED, skip synthesis
-        # and store the meeting record with status reflecting the outcome.
-        if meeting_outcome and meeting_outcome.upper() != "COMPLETED":
+        # If the call didn't take place, skip synthesis and store the meeting
+        # record with status reflecting the outcome.
+        if meeting_outcome in NOT_HELD_OUTCOMES:
             logger.info(
                 f"Skipping synthesis for {pairing_key}: outcome={meeting_outcome}"
             )
@@ -222,6 +237,20 @@ def resynthesize_meeting(
     transcript   = meeting["transcript_text"]
     recording_owner = meeting.get("recording_owner", "")
 
+    # A meeting whose outcome says it wasn't held (set in the orb, or it was already
+    # a no-show when its type was edited) is not synthesized — it's settled as a
+    # no-show and nurture is told so.
+    outcome = _settled_outcome(meeting.get("meeting_outcome"))
+    if outcome in NOT_HELD_OUTCOMES:
+        db.settle_not_held(meeting_id)
+        logger.info(f"Meeting {meeting_id} settled as {outcome} without synthesis")
+        if meeting.get("import_source") != "attention":
+            _emit(config, meeting_id, _emit_row(meeting), meeting_type,
+                  meeting.get("meeting_type_source") or "manual", outcome, "no_show",
+                  {}, db.get_contacts(meeting_id), meeting.get("hubspot_deal_id"),
+                  synthesized=False)
+        return
+
     logger.info(f"Re-synthesizing meeting {meeting_id} as type={meeting_type}")
     try:
         talk_ratio = compute_talk_ratio(transcript, recording_owner)
@@ -239,25 +268,30 @@ def resynthesize_meeting(
         return
 
     # Propagate the corrected meeting to nurture (best-effort; _emit never raises).
+    _emit(
+        config, meeting_id, _emit_row(meeting),
+        meeting_type, meeting.get("meeting_type_source") or "manual",
+        # Re-synthesis only runs on stored transcripts of calls that happened; a null
+        # stored outcome means HubSpot never matched it, not that it didn't occur.
+        # A stale SCHEDULED is not an outcome either — same rule as process_row.
+        outcome or "COMPLETED", "complete",
+        synthesis, db.get_contacts(meeting_id), meeting.get("hubspot_deal_id"),
+        synthesized=True,
+    )
+
+
+def _emit_row(meeting: dict) -> dict:
+    """The row-shaped fields _emit needs, from a stored meeting."""
     dt = meeting.get("meeting_datetime")
-    emit_row = {
+    return {
         "pairing_key":      meeting.get("pairing_key"),
         "meeting_name":     meeting.get("meeting_name"),
         # meeting_datetime comes back from Postgres as a datetime; the emit json-encodes
         # the payload, so hand it an ISO string (a raw datetime would make json.dumps
         # raise inside _emit and silently drop the emit).
         "meeting_datetime": dt.isoformat() if hasattr(dt, "isoformat") else dt,
-        "recording_owner":  recording_owner,
+        "recording_owner":  meeting.get("recording_owner", ""),
     }
-    _emit(
-        config, meeting_id, emit_row,
-        meeting_type, meeting.get("meeting_type_source") or "manual",
-        # Re-synthesis only runs on stored transcripts of calls that happened; a null
-        # stored outcome means HubSpot never matched it, not that it didn't occur.
-        meeting.get("meeting_outcome") or "COMPLETED", "complete",
-        synthesis, db.get_contacts(meeting_id), meeting.get("hubspot_deal_id"),
-        synthesized=True,
-    )
 
 
 def run() -> None:

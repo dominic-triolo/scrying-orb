@@ -69,15 +69,16 @@ class RecallTranscriptStore:
 
 
 def people_who_joined(participants: list) -> int:
-    """Distinct humans among the participants the bot saw. Counted by display name
-    so someone who drops and rejoins, or is on two devices, is one person."""
-    names = set()
+    """Distinct humans among the participants the bot saw. Counted by Meet's stable
+    per-person id — not by display name, which two different people can share."""
+    people = set()
     for participant in participants:
         name = (participant.get("name") or "").strip().lower()
         if any(hint in name for hint in _BOT_NAME_HINTS):
             continue
-        names.add(name or f"#{participant.get('id')}")
-    return len(names)
+        meet = ((participant.get("extra_data") or {}).get("google_meet") or {})
+        people.add(meet.get("static_participant_id") or f"#{participant.get('id')}")
+    return len(people)
 
 
 def _row_from_bot(bot: dict, pending_id: str, participants: list | None = None) -> dict:

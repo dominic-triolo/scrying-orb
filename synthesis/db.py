@@ -196,6 +196,21 @@ class DBClient:
                 conn.commit()
         logger.info(f"Re-synthesis complete for meeting {meeting_id}")
 
+    def settle_not_held(self, meeting_id: str) -> None:
+        """Take a queued meeting whose outcome says it wasn't held out of the
+        re-synthesis queue: no synthesis, shown as a no-show."""
+        sql = """
+            UPDATE meetings SET
+                status           = 'no_show',
+                synthesis_output = '{}'::jsonb,
+                synthesized_at   = NULL
+            WHERE id = %s
+        """
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (meeting_id,))
+                conn.commit()
+
     def get_meeting_type_id_by_label(self, label: str) -> str | None:
         """
         Look up a meeting type ID by its label (case-insensitive).

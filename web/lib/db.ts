@@ -488,6 +488,26 @@ export async function updateMeetingType(
   )
 }
 
+/**
+ * Set a meeting's outcome by hand and queue it for the worker, which then either
+ * synthesizes it (COMPLETED) or settles it as a no-show, and tells the nurture tool.
+ * Same queue a type edit uses (status = 'pending_synthesis').
+ */
+export async function updateMeetingOutcome(id: string, outcome: string): Promise<void> {
+  await pool.query(
+    `
+    UPDATE meetings
+    SET
+      meeting_outcome  = $2,
+      status           = 'pending_synthesis',
+      synthesis_output = NULL,
+      synthesized_at   = NULL
+    WHERE id = $1
+    `,
+    [id, outcome]
+  )
+}
+
 // ── Cross-transcript analysis (migration 010) ───────────────────────────────
 
 export interface AnalysisFilters {
