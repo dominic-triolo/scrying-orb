@@ -13,6 +13,13 @@ import type { MeetingDetail } from '@/lib/db'
 
 interface MeetingTypeConfig { id: string; label: string; scoreable: boolean }
 
+const OUTCOME_OPTIONS = [
+  { value: 'COMPLETED', label: 'Completed' },
+  { value: 'NO_SHOW', label: 'No show' },
+  { value: 'RESCHEDULED', label: 'Rescheduled' },
+  { value: 'CANCELED', label: 'Cancelled' },
+]
+
 function formatDate(iso: string | null): string {
   if (!iso) return 'Unknown date'
   return new Date(iso).toLocaleDateString('en-US', {
@@ -33,6 +40,10 @@ export default function MeetingPage() {
   const [typeEdit, setTypeEdit] = useState(false)
   const [savingType, setSavingType] = useState(false)
   const [selectedType, setSelectedType] = useState('')
+  const [outcomeEdit, setOutcomeEdit] = useState(false)
+  const [savingOutcome, setSavingOutcome] = useState(false)
+  const [selectedOutcome, setSelectedOutcome] = useState('COMPLETED')
+  const [outcomeError, setOutcomeError] = useState<string | null>(null)
   const [cachedNote, setCachedNote] = useState<string | null>(null)
   const [analyzing, setAnalyzing] = useState(false)
   const [analyzeError, setAnalyzeError] = useState<string | null>(null)
@@ -75,6 +86,27 @@ export default function MeetingPage() {
     }
     setSavingType(false)
     setTypeEdit(false)
+  }
+
+  // Correct the outcome (e.g. a real call the orb filed as a no-show). The worker
+  // re-processes the meeting on its next poll, so the analysis clears until then.
+  async function saveOutcome() {
+    if (!meeting) return
+    setSavingOutcome(true)
+    setOutcomeError(null)
+    const res = await fetch(`/api/meetings/${id}/outcome`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ outcome: selectedOutcome }),
+    })
+    if (res.ok) {
+      setMeeting((m) => m ? { ...m, meeting_outcome: selectedOutcome, status: 'pending_synthesis', synthesis_output: null } : m)
+      setOutcomeEdit(false)
+    } else {
+      const data = await res.json().catch(() => ({}))
+      setOutcomeError(data.error ?? 'Could not update the outcome.')
+    }
+    setSavingOutcome(false)
   }
 
   // On-demand synthesis for an imported (legacy) meeting. Fires only on click —
@@ -169,7 +201,32 @@ export default function MeetingPage() {
 
             {/* Meeting type */}
             <div className="flex items-center gap-2 flex-shrink-0">
-              {typeEdit ? (
+              {outcomeEdit ? (
+                <>
+                  <select
+                    value={selectedOutcome}
+                    onChange={(e) => setSelectedOutcome(e.target.value)}
+                    className="rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    {OUTCOME_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={saveOutcome}
+                    disabled={savingOutcome}
+                    className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                  >
+                    {savingOutcome ? 'Saving…' : 'Save'}
+                  </button>
+                  <button
+                    onClick={() => { setOutcomeEdit(false); setOutcomeError(null) }}
+                    className="rounded-md px-3 py-1.5 text-sm text-gray-500 hover:text-gray-700 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : typeEdit ? (
                 <>
                   <select
                     value={selectedType}
@@ -207,12 +264,28 @@ export default function MeetingPage() {
                     onClick={() => setTypeEdit(true)}
                     className="text-xs text-blue-600 hover:text-blue-800 transition-colors"
                   >
-                    Edit
+                    Edit type
                   </button>
+                  {meeting.status !== 'legacy' && (
+                    <button
+                      onClick={() => {
+                        const current = (meeting.meeting_outcome ?? '').toUpperCase()
+                        setSelectedOutcome(OUTCOME_OPTIONS.some((o) => o.value === current) ? current : 'COMPLETED')
+                        setOutcomeEdit(true)
+                      }}
+                      className="text-xs text-blue-600 hover:text-blue-800 transition-colors"
+                    >
+                      {meeting.meeting_outcome ? 'Edit outcome' : 'Set outcome'}
+                    </button>
+                  )}
                 </>
               )}
             </div>
           </div>
+
+          {outcomeError && (
+            <p className="mt-3 text-xs text-red-600 bg-red-50 rounded-md px-3 py-2 w-fit">{outcomeError}</p>
+          )}
 
           {meeting.status === 'legacy' && meeting.synthesis_output === null ? (
             <div className="mt-3">
@@ -234,7 +307,7 @@ export default function MeetingPage() {
             </div>
           ) : meeting.synthesis_output === null && meeting.meeting_type ? (
             <p className="mt-3 text-xs text-amber-600 bg-amber-50 rounded-md px-3 py-2 inline-block">
-              Re-synthesis queued — the service will reprocess this meeting with the updated type shortly.
+              Update queued — the service will reprocess this meeting shortly.
             </p>
           ) : null}
         </div>
