@@ -23,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 
 from config import Config
 from db import DBClient
+from nurture_emit import emit_calendar_event
 from recall import AUTOMATIC_LEAVE, BOT_NAME, RECORDING_CONFIG, RecallClient
 
 logger = logging.getLogger(__name__)
@@ -97,9 +98,12 @@ def recording_plan(event: dict, calendar_email: str) -> dict | None:
     }
 
 
-def sync_calendar(calendar: dict, recall: RecallClient) -> dict:
+def sync_calendar(calendar: dict, recall: RecallClient, config: Config | None = None) -> dict:
     """Apply recording_plan to every event changed since the calendar's watermark.
-    Returns counts for the log line. Raises on Recall errors so the sync stays owed."""
+    Returns counts for the log line. Raises on Recall errors so the sync stays owed.
+
+    With `config`, each changed event with an outside attendee is also reported to the
+    nurture tool (created, moved or cancelled), so a host's path can follow their call."""
     now = datetime.now(timezone.utc)
     sync_from = calendar["sync_from"]
     events = recall.list_calendar_events(
@@ -109,12 +113,17 @@ def sync_calendar(calendar: dict, recall: RecallClient) -> dict:
     # Soonest first, so a rate limit or crash costs the far-future events, not today's.
     events.sort(key=lambda e: e.get("start_time") or "")
 
-    counts = {"scheduled": 0, "removed": 0, "skipped": 0}
+    counts = {"scheduled": 0, "removed": 0, "skipped": 0, "nurture": 0}
     for event in events:
         end = _parse_ts(event.get("end_time"))
         if end and end <= now:
             counts["skipped"] += 1      # Recall rejects scheduling for ended events
             continue
+
+        # Independent of whether the event gets a bot: a call that loses its Meet link, or
+        # is cancelled outright, is exactly what the nurture tool needs to hear about.
+        if config is not None and emit_calendar_event(config, event, calendar["email"]):
+            counts["nurture"] += 1
 
         metadata = recording_plan(event, calendar["email"])
         if metadata:
@@ -166,7 +175,7 @@ def run_calendar_sync_loop(config: Config, poll_seconds: int = POLL_SECONDS) -> 
         try:
             for calendar in db.get_calendars_needing_sync():
                 try:
-                    counts = sync_calendar(calendar, recall)
+                    counts = sync_calendar(calendar, recall, config)
                     db.clear_calendar_sync(str(calendar["id"]), calendar["sync_requested_at"])
                     logger.info(f"Calendar sync {calendar['email']}: {counts}")
                 except Exception as err:
